@@ -1,0 +1,95 @@
+# Ella
+
+A model-testing workbench for Blockbench authors.
+
+Pick a Minecraft version, create a block or item, open it in Blockbench, and watch it update
+**live in the running game** — no restart, no manual file copying, no writing a mod. Export
+the finished work as a resource pack zip when you are done.
+
+Targets **Minecraft 1.8.9 → 26.2** on Forge.
+
+## Status
+
+Early but working end to end in code: the launcher builds and runs, both adapter jars
+compile against real Forge toolchains, and 202 launcher tests plus 23 Java tests pass.
+
+| Component | State |
+|---|---|
+| Project format & IPC protocol specs | done |
+| `ella-core` (shared Java 8 module) | done — 23 tests |
+| Electron launcher (versions, download, launch) | done |
+| Forge install + adapter injection | done |
+| Adapter presence check on every launch | done |
+| Version install / uninstall | done |
+| Quick launch from any view | done |
+| Project and entry deletion | done |
+| Block/item editor with capability gating | done |
+| Blockbench open + file watch | done |
+| Blockbench live-sync plugin | done |
+| Resource pack `.zip` export | done |
+| Windows installer + portable `.exe` | done — built and smoke-tested |
+| GitHub Actions build & release workflow | written, not yet run against a remote |
+| Forge adapter 1.12.2 (`[1.12, 1.13)`) | **verified in game** — blocks render in hand and placed |
+| Forge adapter 1.21.1 (`[1.21.1, 1.21.2)`) | builds and loads; in-game rendering not yet confirmed |
+| Forge adapters 1.8.9 and 1.16.5–1.20.1 | not started |
+| OBJ model source | designed for, not implemented |
+
+The full loop works on 1.12.2: the launcher installs Minecraft and Forge, picks the right
+JDK, injects the adapter, the mod registers its slot pool and connects back, the workspace
+pack loads, and blocks render correctly in hand and in the world.
+
+Getting there took seven real bugs, each documented where it was found — see the gotchas
+in [`docs/building.md`](docs/building.md) and the cross-version traps in
+[`docs/architecture.md`](docs/architecture.md). Six of the seven were invisible to the
+compiler and only surfaced in a running game.
+
+**Version coverage is narrow and deliberately honest.** An adapter claims only the
+versions it was compiled against, because Forge changed the block properties and item
+component APIs inside every bucket — "compiles for 1.21.1" says nothing about 1.21.11.
+`ADAPTERS` in `src/shared/version.ts` is the single source of truth, and its ranges must
+match what each adapter declares to its loader. The launcher shows *Live editing*,
+*Adapter not built yet*, or *Vanilla only* per version rather than offering a jar the game
+will refuse.
+
+## Layout
+
+```
+launcher/           Electron + TypeScript — launcher, editor UI, Blockbench bridge
+mod/
+  ella-core/        version-agnostic Java 8 core (slot pool, protocol, settings)
+  adapters/         one thin Forge adapter per version bucket
+blockbench-plugin/  optional plugin: saves after each edit
+docs/               architecture, project format, protocol, building
+```
+
+Adapters are independent Gradle builds — the 1.12.2 and modern toolchains cannot share
+one. `ella-core` is compiled from source into each adapter rather than published, so an
+adapter can never be built against a stale core.
+
+## Requirements
+
+Running the packaged app:
+
+- JDK 8 and 21 — Minecraft's, not Ella's. Ella auto-detects installed JDKs and picks the
+  right one per version, and says so before launching rather than failing halfway.
+- Blockbench
+
+Building from source additionally needs Node.js 20+ and a JDK 17 for Gradle.
+
+## Packaging
+
+```bash
+cd launcher && npm run dist
+```
+
+Produces a per-user installer and a portable `.exe` in `launcher/release/`. The adapter
+jars have to be built first — see [`docs/building.md`](docs/building.md#packaging), which
+also covers the CI workflow and the one Windows privilege error worth knowing about.
+
+See [`docs/building.md`](docs/building.md) to build, and
+[`docs/architecture.md`](docs/architecture.md) for the design and the reasoning behind it.
+
+## Language policy
+
+Code, comments and docs are English. All user-facing text goes through i18n with English
+and French locales; a test fails if an English string lands without its French counterpart.

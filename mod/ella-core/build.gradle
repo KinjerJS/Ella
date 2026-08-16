@@ -1,0 +1,53 @@
+/*
+ * ella-core — the version-agnostic half of the Ella mod.
+ *
+ * Deliberately a plain Java library with no Forge dependency and no ForgeGradle plugin:
+ * ForgeGradle 2 (needed for 1.12.2) and modern ForgeGradle cannot coexist in one build,
+ * so the adapters are separate Gradle builds that each consume this jar.
+ *
+ * Targets Java 8 because the 1.8.9 and 1.12.2 adapters run on it. Java 8 bytecode loads
+ * fine on 21, so one artifact serves every adapter.
+ */
+
+plugins {
+    id 'java-library'
+}
+
+group = 'dev.ella'
+version = '0.1.0'
+
+java {
+    // Toolchain rather than sourceCompatibility: this must compile on a machine whose
+    // default JDK is 21, which cannot target 8 without one.
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(8)
+    }
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Minecraft bundles Gson on every version Ella targets, so it is present at runtime
+    // and must not be shaded in — doing so would risk clashing with the game's copy.
+    compileOnly 'com.google.code.gson:gson:2.8.9'
+
+    testImplementation 'com.google.code.gson:gson:2.8.9'
+    testImplementation 'junit:junit:4.13.2'
+}
+
+tasks.named('test') {
+    // Tests may run on a newer JDK than the compile target; that is fine and faster.
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+/*
+ * Adapters do not depend on this jar. They add `../ella-core/src/main/java` to their own
+ * source set instead, which sidesteps publishing to a local repository and guarantees an
+ * adapter can never be built against a stale core. This module's own build exists so the
+ * core can be compiled and unit-tested on its own, without any Minecraft toolchain.
+ */

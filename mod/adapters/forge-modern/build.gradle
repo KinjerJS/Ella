@@ -1,0 +1,75 @@
+/*
+ * Ella adapter for modern Minecraft on Forge.
+ *
+ * Pinned to 1.21.1: it is the version this adapter has been written and checked against.
+ * The `forge-modern` bucket is meant to cover 1.20.2 upwards, but "compiles here" does
+ * not imply "compiles there" — Forge changed the block properties API more than once
+ * across that span. Extending the bucket means building against each target, not assuming.
+ */
+
+plugins {
+    id 'net.minecraftforge.gradle' version '[6.0.24,6.2)'
+}
+
+group = 'dev.ella'
+version = '0.1.0'
+archivesBaseName = 'ella-forge-modern'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+minecraft {
+    // Official Mojang mappings; the licence is accepted by using them for a mod.
+    mappings channel: 'official', version: '1.21.1'
+
+    runs {
+        client {
+            workingDirectory project.file('run')
+            property 'forge.logging.console.level', 'info'
+            mods {
+                ella {
+                    source sourceSets.main
+                }
+            }
+        }
+    }
+}
+
+/*
+ * ella-core is compiled from source rather than consumed as a jar, so an adapter can
+ * never be built against a stale copy of the shared code.
+ */
+sourceSets {
+    main {
+        java {
+            srcDir file('../../ella-core/src/main/java')
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Forge's recommended build for 1.21.1, taken from promotions_slim.json rather than
+    // guessed — the same endpoint the launcher queries when installing Forge.
+    minecraft 'net.minecraftforge:forge:1.21.1-52.1.0'
+}
+
+processResources {
+    inputs.property 'version', project.version
+
+    filesMatching('META-INF/mods.toml') {
+        expand 'version': project.version
+    }
+}
+
+jar {
+    manifest {
+        attributes(['Implementation-Version': project.version])
+    }
+}

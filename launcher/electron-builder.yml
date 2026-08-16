@@ -1,0 +1,65 @@
+appId: dev.ella.launcher
+productName: Ella
+copyright: Ella
+
+# No auto-update channel. Without this electron-builder tries to write update metadata and
+# fails on a repository it cannot identify; releases are attached by the CI workflow
+# instead, which keeps publishing out of the packaging step.
+publish: null
+
+directories:
+  # `build/` holds the generated icon; `npm run dist` regenerates it before packaging.
+  buildResources: build
+  output: release
+
+# electron-vite has already bundled the sources into out/, so nothing under src/ needs to
+# ship. Production dependencies are added by electron-builder itself — adm-zip stays
+# external (externalizeDepsPlugin) and is resolved from node_modules at runtime.
+files:
+  - out/**
+  - package.json
+
+# Adapter jars live outside the asar so the injector can copy them as plain files, and so
+# a rebuilt adapter can be dropped in without repacking the archive.
+extraResources:
+  - from: resources/adapters
+    to: adapters
+    filter:
+      - '**/*.jar'
+
+win:
+  icon: build/icon.ico
+  # An installer for normal use, and a single-file build for a USB stick or a machine
+  # where installing anything is a fight.
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  # Per-user by default: no administrator prompt, and it keeps Ella's data root and its
+  # program files under the same account.
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Ella
+  artifactName: Ella-Setup-${version}.${ext}
+  # Ella keeps everything it downloads in userData, which uninstalling must not touch:
+  # that folder holds the user's projects alongside the Minecraft cache.
+  deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: Ella-${version}-portable.${ext}
+
+linux:
+  icon: build/icon.png
+  category: Development
+  target: [AppImage]
+
+mac:
+  icon: build/icon.png
+  category: public.app-category.developer-tools
+  target: [dmg]

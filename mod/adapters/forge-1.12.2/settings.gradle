@@ -1,0 +1,12 @@
+pluginManagement {
+    repositories {
+        maven {
+            name = 'GTNewHorizons'
+            url = 'https://nexus.gtnewhorizons.com/repository/public/'
+        }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'ella-forge-1.12.2'

@@ -1,0 +1,26 @@
+modLoader = "javafml"
+loaderVersion = "[52,)"
+license = "MIT"
+
+[[mods]]
+modId = "ella"
+version = "${version}"
+displayName = "Ella"
+description = '''
+Live Blockbench model testing. Binds project entries to a pool of placeholder blocks and
+items so models can be edited without restarting the game.
+'''
+
+[[dependencies.ella]]
+modId = "forge"
+mandatory = true
+versionRange = "[52,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.ella]]
+modId = "minecraft"
+mandatory = true
+versionRange = "[1.21.1,1.21.2)"
+ordering = "NONE"
+side = "CLIENT"
