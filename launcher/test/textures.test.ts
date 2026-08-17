@@ -52,11 +52,21 @@ test('lists the model texture variables with previews', async () => {
   const { root, project, entry } = await seed();
   const textures = await listTextures(root, project, entry);
 
-  assert.equal(textures.length, 1);
-  assert.equal(textures[0].key, 'all');
-  assert.equal(textures[0].reference, 'proj:block/lamp');
-  assert.equal(textures[0].exists, true);
-  assert.equal(textures[0].width, 16);
+  // `all` and the particle slot. The generated model declares both because it is
+  // self-contained: inheriting from block/cube_all used to supply `particle: #all` for
+  // free, and dropping that parent — see shared/model-compat.ts — means saying it here or
+  // losing break and step particles.
+  assert.equal(textures.length, 2);
+
+  const all = textures.find((texture) => texture.key === 'all');
+  assert.ok(all, 'the drawable variable');
+  assert.equal(all.reference, 'proj:block/lamp');
+  assert.equal(all.exists, true);
+  assert.equal(all.width, 16);
+
+  const particle = textures.find((texture) => texture.isParticleSlot);
+  assert.ok(particle, 'the particle slot');
+  assert.equal(particle.reference, 'proj:block/lamp');
 });
 
 test('reports which faces use each variable', async () => {

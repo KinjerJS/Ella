@@ -54,7 +54,7 @@ Sent immediately on connect.
     "loader": "forge",
     "loaderVersion": "14.23.5.2859",
     "adapter": "forge-1.12.2",
-    "adapterVersion": "0.1.0",
+    "adapterVersion": "0.2.0",
     "javaVersion": "8",
     "slots": { "block": 128, "item": 128 },
     "capabilities": ["render_layer.cutout", "..."]

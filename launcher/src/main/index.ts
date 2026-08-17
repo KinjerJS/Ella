@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { CHANNELS, EVENTS, type Result } from '../shared/ipc.ts';
 import { setDataRoot, ensureLayout, instanceDir } from './paths.ts';
 import { formatDiagnostics, type CrashDiagnostics } from './diagnostics.ts';
-import { loadConfig, saveConfig } from './config.ts';
+import { loadConfig, saveConfig, resolveBlockbenchPath } from './config.ts';
+import { createSplash, MIN_SPLASH_MS } from './splash.ts';
+import { translate } from '../shared/i18n.ts';
 import { discoverJavaRuntimes } from './java-runtime.ts';
 import {
   listVersions,
@@ -33,11 +35,17 @@ import {
   measureProject,
   updateProjectInfo,
   readEntryPreviews,
+  removeModelParent,
+  restoreEntry,
+  writeModelFile,
 } from './project.ts';
+import { UndoRegistry } from './undo.ts';
+import { planVersionChange, applyVersionChange } from './version-change.ts';
 import {
   listTextures,
   addTexture,
   removeTexture,
+  restoreTexture,
   setParticleTexture,
   importTextureFor,
 } from './textures.ts';
@@ -48,6 +56,7 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let window: BrowserWindow | null = null;
 const session = new Session();
+const undoable = new UndoRegistry();
 
 /** Wraps a handler so IPC never rejects: the renderer always receives a Result. */
 function handle<T>(channel: string, handler: (...args: never[]) => Promise<T> | T): void {
@@ -81,6 +90,21 @@ function requireProject(): { project: NonNullable<Session['project']>; root: str
     throw error;
   }
   return { project: session.project, root: session.projectRoot };
+}
+
+/**
+ * Announces a change that can still be taken back.
+ *
+ * The inverse re-reads the open project rather than capturing it: seconds pass between the
+ * offer and the click, and applying an undo to the project as it was would quietly discard
+ * anything done in between.
+ */
+function offerUndo(
+  messageKey: string,
+  values: Record<string, string | number>,
+  inverse: () => Promise<void>,
+): void {
+  send(EVENTS.undo, undoable.offer(messageKey, values, inverse));
 }
 
 function findEntry(id: string) {
@@ -194,6 +218,10 @@ function registerHandlers(): void {
   });
 
   handle(CHANNELS.projectsOpen, async (root: never) => {
+    // Every pending inverse names files and entries in the project being left. Applied to
+    // the next one they would restore something into a project it never belonged to.
+    undoable.clear();
+
     const project = await session.openProject(root);
     await saveConfig({ lastProject: root });
     return project;
@@ -212,7 +240,10 @@ function registerHandlers(): void {
   handle(CHANNELS.projectsDelete, async (root: never) => {
     // Close first: deleting the directory a watcher is bound to leaves the session
     // pointing at files that no longer exist.
-    if (session.projectRoot === root) session.closeProject();
+    if (session.projectRoot === root) {
+      undoable.clear();
+      session.closeProject();
+    }
 
     await deleteProject(root);
     const config = await loadConfig();
@@ -222,6 +253,7 @@ function registerHandlers(): void {
   });
 
   handle(CHANNELS.projectsClose, () => {
+    undoable.clear();
     session.closeProject();
   });
 
@@ -234,6 +266,33 @@ function registerHandlers(): void {
     return updated;
   });
 
+  handle(CHANNELS.projectsPlanVersionChange, (versionId: never) => {
+    const { project, root } = requireProject();
+    return planVersionChange(root, project, versionId);
+  });
+
+  handle(CHANNELS.projectsApplyVersionChange, async (versionId: never, migrate: never) => {
+    const { project, root } = requireProject();
+    const result = await applyVersionChange(root, project, versionId, { migrate });
+
+    // Rewritten models are the files the game reads, so the session has to adopt the new
+    // project and push: skipping this would leave the running game on the old geometry
+    // until something else happened to trigger a reload.
+    await session.setProject(result.project);
+
+    if (result.migrated.length > 0) {
+      send(EVENTS.log, {
+        level: 'info',
+        source: 'ella',
+        message:
+          `Adapted ${result.migrated.length} model(s) to Minecraft ${versionId}: ` +
+          result.migrated.join(', '),
+      });
+    }
+
+    return result;
+  });
+
   handle(CHANNELS.entriesCreate, async (options: never) => {
     const { project, root } = requireProject();
     const { project: updated, entry } = await createEntry(root, project, options);
@@ -243,8 +302,22 @@ function registerHandlers(): void {
 
   handle(CHANNELS.entriesUpdate, async (id: never, patch: never) => {
     const { project, root } = requireProject();
+    const previous = findEntry(id).displayName;
     const { project: updated, entry } = await updateEntry(root, project, id, patch);
     await session.setProject(updated);
+
+    // Only the display name. A slot or settings change arrives from a control that already
+    // shows its own value, so putting it back is moving that control back.
+    if ((patch as { displayName?: unknown }).displayName) {
+      offerUndo('entry.renamedTitleDone', { name: entry.displayName.en }, async () => {
+        const current = requireProject();
+        const reverted = await updateEntry(current.root, current.project, entry.id, {
+          displayName: previous,
+        });
+        await session.setProject(reverted.project);
+      });
+    }
+
     return entry;
   });
 
@@ -252,13 +325,32 @@ function registerHandlers(): void {
     const { project, root } = requireProject();
     const { project: updated, entry } = await renameEntry(root, project, id, newId);
     await session.setProject(updated);
+
+    // renameEntry is a no-op when the id has not changed, and an undo for nothing would be
+    // a notification for nothing.
+    if (entry.id !== id) {
+      offerUndo('entry.renamedDone', { from: id, to: entry.id }, async () => {
+        const current = requireProject();
+        const reverted = await renameEntry(current.root, current.project, entry.id, id);
+        await session.setProject(reverted.project);
+      });
+    }
+
     return entry;
   });
 
   handle(CHANNELS.entriesDelete, async (id: never, deleteFiles: never) => {
     const { project, root } = requireProject();
-    const updated = await deleteEntry(root, project, id, { deleteFiles });
+    const { project: updated, entry, index } = await deleteEntry(root, project, id, {
+      deleteFiles,
+    });
     await session.setProject(updated);
+
+    offerUndo('entry.deletedDone', { id }, async () => {
+      const current = requireProject();
+      const restored = await restoreEntry(current.root, current.project, entry, index);
+      await session.setProject(restored.project);
+    });
   });
 
   handle(CHANNELS.entriesPatchLive, async (id: never, settings: never) => {
@@ -266,8 +358,11 @@ function registerHandlers(): void {
     // Persist first: the on-disk project is the source of truth even if the game is
     // not running or silently ignores a key.
     const { project, root } = requireProject();
-    const { project: updated } = await updateEntry(root, project, id, { settings });
-    await session.setProject(updated, { push: false });
+    const { project: updated, entry: patched } = await updateEntry(root, project, id, { settings });
+    // Settings cannot affect any slot but this entry's own, so only that one is rewritten.
+    // This runs once per slider tick — a full namespace rebuild here is what made the
+    // editor lag behind the control the user was dragging.
+    await session.setEntry(updated, patched);
     return session.patchEntrySettings({ ...entry, settings }, settings);
   });
 
@@ -307,8 +402,17 @@ function registerHandlers(): void {
 
   handle(CHANNELS.entriesRemoveTexture, async (id: never, key: never, deleteFile: never) => {
     const { project, root } = requireProject();
-    const result = await removeTexture(root, project, findEntry(id), key, { deleteFile });
+    const { removed, ...result } = await removeTexture(root, project, findEntry(id), key, {
+      deleteFile,
+    });
     await session.pushAll();
+
+    offerUndo('texture.removedDone', { key }, async () => {
+      const current = requireProject();
+      await restoreTexture(current.root, current.project, findEntry(id), removed);
+      await session.pushAll();
+    });
+
     return result;
   });
 
@@ -322,6 +426,25 @@ function registerHandlers(): void {
   handle(CHANNELS.entriesPreviews, () => {
     const { project, root } = requireProject();
     return readEntryPreviews(root, project);
+  });
+
+  handle(CHANNELS.entriesRemoveModelParent, async (id: never) => {
+    const { root } = requireProject();
+    const removed = await removeModelParent(root, findEntry(id));
+    if (removed === null) return null;
+
+    // The slot redirect points at this file, so what the game loads changes with it.
+    await session.pushAll();
+
+    // Ella rewrote a file the author owns, so the way back is the file as it was — not a
+    // re-derived version of it, which would also undo whatever Blockbench formatted.
+    offerUndo('model.parentRemoved', { parent: removed.parent }, async () => {
+      const current = requireProject();
+      await writeModelFile(current.root, findEntry(id), removed.original);
+      await session.pushAll();
+    });
+
+    return removed.parent;
   });
 
   handle(CHANNELS.entriesRevealTexture, () => {
@@ -339,9 +462,24 @@ function registerHandlers(): void {
     await session.placeEntry(findEntry(id));
   });
 
+  handle(CHANNELS.undoRun, (token: never) => undoable.run(token));
+
   handle(CHANNELS.gameLaunch, async (versionId: never) => {
     await session.launch(versionId);
     await saveConfig({ lastVersion: versionId });
+
+    // A project with no version yet adopts the first one it is launched on. Asking instead
+    // would be a dialog whose only answer is the version already being launched, and it
+    // means every project made before this existed binds itself on its next run.
+    if (session.project && session.projectRoot && session.project.targetVersion === null) {
+      const { project } = await applyVersionChange(
+        session.projectRoot,
+        session.project,
+        versionId,
+        { migrate: false },
+      );
+      await session.setProject(project, { push: false });
+    }
   });
 
   handle(CHANNELS.gameStop, () => {
@@ -372,6 +510,7 @@ function registerHandlers(): void {
     return defaultExportName(project);
   });
 
+  handleRaw(CHANNELS.blockbenchResolve, () => resolveBlockbenchPath());
   handleRaw(CHANNELS.blockbenchPluginStatus, () => pluginStatus());
   handle(CHANNELS.blockbenchInstallPlugin, () => installPlugin());
 
@@ -450,7 +589,11 @@ function sessionStateDto() {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-function createWindow(): void {
+/**
+ * @param splash   Closed once the main window can paint, or null when there is none.
+ * @param shownAt  When the splash appeared, so it can be held for its minimum.
+ */
+function createWindow(splash: BrowserWindow | null = null, shownAt = 0): void {
   window = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -458,7 +601,9 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#16161c',
+    // Matches --bg, so the frame that shows before the renderer paints is not a flash of
+    // a different colour.
+    backgroundColor: '#0f0f14',
     webPreferences: {
       preload: path.join(dirname, '../preload/index.mjs'),
       sandbox: false,
@@ -467,7 +612,25 @@ function createWindow(): void {
     },
   });
 
-  window.once('ready-to-show', () => window?.show());
+  const closeSplash = (): void => {
+    if (splash && !splash.isDestroyed()) splash.close();
+  };
+
+  window.once('ready-to-show', () => {
+    const remaining = Math.max(0, MIN_SPLASH_MS - (Date.now() - shownAt));
+    setTimeout(() => {
+      // The main window comes up first. Closing the splash first would leave a frame of
+      // bare desktop where the app should be.
+      window?.show();
+      closeSplash();
+    }, remaining);
+  });
+
+  // The splash is always-on-top and has no close button, so it must never be able to
+  // outlive a main window that failed to paint.
+  const failsafe = setTimeout(closeSplash, 20_000);
+  window.once('closed', () => clearTimeout(failsafe));
+  window.webContents.once('did-fail-load', closeSplash);
 
   // Anything that is not the app itself belongs in the user's browser.
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -485,6 +648,13 @@ function createWindow(): void {
 
 void app.whenReady().then(async () => {
   setDataRoot(app.getPath('userData'));
+
+  // Up before anything slow runs. Reopening the last project regenerates its pack, which
+  // is most of the wait between clicking the icon and seeing a window.
+  const startupConfig = await loadConfig();
+  const splash = createSplash(translate(startupConfig.locale, 'app.tagline'));
+  const splashShownAt = Date.now();
+
   await ensureLayout();
 
   registerHandlers();
@@ -511,14 +681,13 @@ void app.whenReady().then(async () => {
   }
 
   // Reopen whatever was last in use, so the app starts where the user left off.
-  const config = await loadConfig();
-  if (config.lastProject) {
-    await session.openProject(config.lastProject).catch(() => {
+  if (startupConfig.lastProject) {
+    await session.openProject(startupConfig.lastProject).catch(() => {
       // A project that was moved or deleted simply does not reopen.
     });
   }
 
-  createWindow();
+  createWindow(splash, splashShownAt);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

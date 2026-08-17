@@ -151,6 +151,73 @@ that merge are easy to get wrong, and both fail far from their cause:
 Both mistakes share a shape worth remembering: a modded version id looks enough like a
 version to pass through code unnoticed, and fails somewhere else entirely.
 
+## A parent overrides the child's geometry on 1.8.x
+
+`ModelBlock.getElements()` on 1.8.9 is, in full:
+
+```java
+return this.hasParent() ? this.parent.getElements() : this.elements;
+```
+
+with `hasParent()` being nothing more than `parent != null`. The parent wins outright. That
+is why vanilla 1.8.9's own `block/cube.json` declares **no** parent and inlines its
+elements — it only gained `"parent": "block/block"` in 1.9, once the semantics flipped to
+"the child's elements win if it has any".
+
+Blockbench keeps whatever parent it finds. So a model that starts life as
+`{ parent: "block/cube_all" }` and then gains geometry carries that parent forever, and on
+1.8.x renders as a plain cube — in the missing-texture checkerboard, because Blockbench
+also rewrites the texture keys and the parent's `#all` stops resolving. The author sees a
+magenta cube and reasonably concludes Ella lost their model. It loaded and was overruled.
+
+Two changes, because one alone is not enough:
+
+- The generated starting model is **self-contained** — its own full-cube elements, `all`
+  and `particle` declared, no parent. There is then no parent for Blockbench to keep. It
+  also has to declare `particle` explicitly, which `block/cube_all` used to supply for free.
+- Models that already carry the trap are detected from the parsed model the editor already
+  holds, and the warning offers to drop the `parent`. Dropping it is the whole fix and
+  costs nothing: from 1.9 onwards that parent's geometry was being ignored anyway.
+
+Ella does not rewrite the author's file on its own. Saving in Blockbench has to stay the
+only thing that changes it, so the fix is a button rather than a repair on load.
+
+## Two generations of Forge installer
+
+Ella runs the official Forge installer headlessly rather than reimplementing it. From 1.13
+onwards that is not a preference: installation runs binary-patch and deobfuscation
+processors, and reproducing those would mean tracking a toolchain that is not ours.
+
+It stops being possible going the other way. `--installClient` was added to the installer
+around 2018; older builds abort with *"'installClient' is not a recognized option"*. That
+covers every Forge build for 1.8.x — so the whole 1.8 line installed as vanilla, and
+because a Forge failure is collected as a warning rather than thrown, the version still
+appeared installed. The symptom was "I have no Forge for 1.8.8", a long way from the cause.
+
+Those same builds predate the processors, so their install genuinely is just unpacking:
+write `versionInfo` from `install_profile.json` as the version json — it carries
+`inheritsFrom`, so the vanilla document supplies the rest — drop the universal jar at the
+path `install.path` names inside `libraries/`, and download the twenty-odd libraries the
+version file lists.
+
+That last step is the one to get wrong, because the official installer does it invisibly.
+Skip it and the game dies before its window opens with
+`NoClassDefFoundError: org/objectweb/asm/ClassVisitor`: ASM is listed in the 1.8.x Forge
+file with no download url at all, so nothing else in the pipeline would ever fetch it. The
+launcher already knows how to resolve the three shapes a library entry can take — a direct
+url, a repository base, or nothing but a coordinate — so the legacy path reuses that code
+rather than carrying a second copy of it.
+
+A missing jar does not stop Java from starting, which is why `buildLaunchCommand` now
+refuses to launch with an incomplete classpath. Checking costs a few stat calls and turns
+a stack trace naming a *class* into one sentence naming the *file* and the fix.
+
+Which path applies is read from the installer's own profile, not from the Minecraft
+version: the old generation carries a `versionInfo` block, the new one carries
+`processors`. The change came with an installer release rather than a game release, and
+1.12.2 sits on the new side of it while 1.8.9 sits on the old one — a version-number rule
+would have put them the wrong way round.
+
 ## Install and uninstall
 
 Downloaded content falls into three groups, and the difference decides what an uninstall
@@ -187,6 +254,52 @@ declares a capability set in its `hello` message. The editor greys out controls 
 version cannot honour and says why. One UI serves the whole range honestly.
 
 See [`protocol.md`](protocol.md) and [`project-format.md`](project-format.md).
+
+## Guided setup, derived rather than stored
+
+Ella's loop needs five things true at once — a version installed, a project open, an entry
+in it, Blockbench reachable, and the mod connected — and the order is not guessable from
+the navigation. The home view walks them as an ordered list.
+
+Nothing about that list is persisted. `shared/workflow.ts` takes a flat snapshot of the
+same state the rest of the UI reads and returns which steps are done and which one is
+current; there is no "onboarding completed" flag anywhere. Two things fall out of that:
+a step cannot claim to be done when it is not, and a step that stops being true — the game
+exits, the project is closed — reopens on its own without anything having to invalidate it.
+It is also the reason the checklist is safe to keep showing after setup is complete, where
+it collapses into a toggle rather than disappearing.
+
+The same principle covers disabled controls. Every one of them carries the reason in its
+`title` — *launch the game first*, *Java 21 was not found*, *stop the running game* —
+because the three states that dim the give/place buttons have three different fixes, and a
+greyed-out button with no reason reads as a broken app rather than a missing prerequisite.
+
+Whether Blockbench is reachable is asked of the main process (`blockbench:resolve`) rather
+than inferred from the configured path, since the usual case is an empty setting and a
+successful auto-detection.
+
+## Two write paths for the slot namespace
+
+`writeSlotNamespace` wipes and regenerates everything: four files per block slot plus one
+per item slot, so a default pool of 128 + 128 is 640 files, about 450 ms. That is the right
+answer for a change that moves bindings, renames the namespace or deletes an entry, because
+a stale blockstate left behind keeps rendering a ghost.
+
+It is the wrong answer for a settings change, which arrives once per slider tick. Settings
+reach the pack through exactly one thing — the render layer, baked into that slot's
+redirect model — so `writeEntrySlot` rewrites that slot alone, four files and about 2 ms.
+`entries:patchLive` takes that path.
+
+Two related rules follow from the same reasoning:
+
+- The `ella` namespace is excluded from the file watcher. It is Ella's own output, and
+  watching it meant every settings change fed its own writes back in as a model change:
+  a reload the game did not need, plus a preview refresh in the editor for each one.
+- The editor's settings form is driven by a local draft, not by the saved project. A
+  control bound to the round trip cannot follow the mouse. Writes are coalesced behind
+  the draft, one at a time, and a spinner reports that they are in flight — the controls
+  are never disabled while saving, since that would reintroduce exactly the stall the
+  draft exists to remove.
 
 ## Language policy
 

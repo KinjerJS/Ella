@@ -28,14 +28,23 @@ the mod injects into the resource stack.
   "formatVersion": 1,
   "name": "My Project",
   "namespace": "myproject",
-  "targetVersions": ["1.12.2", "1.21.1"],
+  "targetVersion": "1.12.2",
   "slotPool": { "block": 128, "item": 128 },
   "entries": []
 }
 ```
 
-`targetVersions` drives validation: the editor warns when a setting is used that some
-listed target cannot honour.
+`targetVersion` is the Minecraft version the project is authored against. The launcher
+preselects it whenever the project is opened, and launching any other version asks first —
+listing what would break in this project's files, and offering to rewrite the ones it can.
+See `shared/version-compat.ts` for what "break" means here; both cases are silent in game,
+which is why they are worth a dialog.
+
+`null` means the project is not bound yet: the next launch adopts its version. That is how
+a project created before the field existed acquires one.
+
+> Replaces a `targetVersions` array that nothing ever read past creation. A manifest still
+> carrying it is migrated on load — the first entry becomes `targetVersion`.
 
 ## Entries
 

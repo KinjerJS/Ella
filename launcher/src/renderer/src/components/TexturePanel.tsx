@@ -13,7 +13,12 @@ import type { TextureVariableDto } from '../../../shared/ipc.ts';
 
 interface Props {
   entryId: string;
-  onError: (message: string) => void;
+  /**
+   * Reports what went wrong, or null once it no longer applies. Every operation clears it
+   * first: a message about the last one, still on screen after the next one worked, is
+   * read as a description of the state rather than of a moment.
+   */
+  onError: (message: string | null) => void;
 }
 
 export function TexturePanel({ entryId, onError }: Props) {
@@ -41,6 +46,7 @@ export function TexturePanel({ entryId, onError }: Props) {
     action: () => Promise<{ ok: true; value: TextureVariableDto[] | null } | { ok: false; message: string }>,
   ): Promise<void> => {
     setBusy(true);
+    onError(null);
     const result = await action();
     setBusy(false);
 
@@ -56,6 +62,7 @@ export function TexturePanel({ entryId, onError }: Props) {
     if (!key) return;
 
     setBusy(true);
+    onError(null);
     const result = await window.ella.entries.addTexture(entryId, key);
     setBusy(false);
 
@@ -69,6 +76,7 @@ export function TexturePanel({ entryId, onError }: Props) {
   };
 
   const remove = async (texture: TextureVariableDto): Promise<void> => {
+    onError(null);
     // The image is kept: the variable is one line of JSON to restore, the artwork is not.
     const result = await window.ella.entries.removeTexture(entryId, texture.key, false);
     if (!result.ok) {
@@ -77,6 +85,8 @@ export function TexturePanel({ entryId, onError }: Props) {
     }
     setTextures(result.value.textures);
 
+    // Not a failure — the removal worked — but the model will not load until those faces
+    // are pointed somewhere else, which is worth more than a toast that scrolls away.
     if (result.value.orphanedFaces.length > 0) {
       onError(
         t('texture.orphanedFaces', {

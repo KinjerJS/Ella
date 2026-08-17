@@ -16,7 +16,7 @@ import { instanceDir, instanceModsDir } from './paths.ts';
 import { findForgeVersionId } from './minecraft/forge.ts';
 import { selectJavaFor } from './java-runtime.ts';
 import { adapterCoverageFor, requiredJavaVersion } from '../shared/version.ts';
-import { LAUNCHER_VERSION } from './minecraft/launch.ts';
+import { APP_VERSION } from '../shared/app.ts';
 
 /** Crash reports run long; keep enough to diagnose without producing an unusable wall. */
 const MAX_CRASH_REPORT_LINES = 120;
@@ -180,7 +180,7 @@ export async function collectCrashDiagnostics(
     context.javaUsed ?? (await selectJavaFor(versionId).catch(() => null));
 
   const environment: Record<string, string> = {
-    'Ella': LAUNCHER_VERSION,
+    'Ella': APP_VERSION,
     'Minecraft': versionId,
     'Forge': forgeVersionId ?? 'not installed',
     'Launched': context.launchedVersionId ?? versionId,

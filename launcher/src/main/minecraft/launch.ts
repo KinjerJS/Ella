@@ -8,6 +8,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Argument, VersionJson } from './types.ts';
 import { matchesRules } from './rules.ts';
@@ -24,9 +25,7 @@ import {
 } from '../paths.ts';
 import { selectJavaFor, type JavaRuntime } from '../java-runtime.ts';
 import { DEFAULT_PORT } from '../../shared/protocol.ts';
-
-export const LAUNCHER_NAME = 'Ella';
-export const LAUNCHER_VERSION = '0.1.0';
+import { APP_NAME, APP_VERSION } from '../../shared/app.ts';
 
 /**
  * Derives the UUID Minecraft itself uses for offline players: an RFC 4122 version 3
@@ -95,6 +94,42 @@ function collectArguments(
   return out;
 }
 
+/** Raised before Java is spawned, so the cause is named rather than inferred. */
+export class MissingLibrariesError extends Error {
+  missing: string[];
+
+  constructor(missing: string[]) {
+    const names = missing.map((file) => path.basename(file));
+    super(
+      `${missing.length} file(s) the game needs are missing, starting with ${names[0]}. ` +
+        'Reinstall this version from the Versions tab to fetch them.',
+    );
+    this.name = 'MissingLibrariesError';
+    this.missing = missing;
+  }
+}
+
+/**
+ * Refuses to launch with an incomplete classpath.
+ *
+ * A missing jar does not stop Java from starting; it surfaces much later as a
+ * `NoClassDefFoundError` deep inside the mod loader, naming a class rather than a file and
+ * pointing at no fix at all. That is how a Forge install which silently skipped its
+ * libraries presented itself. Checking here costs a few stat calls and turns a sixty-line
+ * stack trace into one sentence naming the file and what to do about it.
+ */
+async function requireClasspathPresent(entries: string[]): Promise<void> {
+  const checks = await Promise.all(
+    entries.map(async (file) => ({
+      file,
+      present: await stat(file).then((s) => s.isFile(), () => false),
+    })),
+  );
+
+  const missing = checks.filter((check) => !check.present).map((check) => check.file);
+  if (missing.length > 0) throw new MissingLibrariesError(missing);
+}
+
 export interface LaunchCommand {
   java: JavaRuntime;
   args: string[];
@@ -126,6 +161,8 @@ export async function buildLaunchCommand(options: LaunchOptions): Promise<Launch
     versionJar(clientJarVersion),
   ];
 
+  await requireClasspathPresent(classpathEntries);
+
   const assetIndexId = version.assetIndex?.id ?? version.assets ?? 'legacy';
   const isVirtual = assetIndexId === 'legacy' || assetIndexId === 'pre-1.6';
 
@@ -147,8 +184,8 @@ export async function buildLaunchCommand(options: LaunchOptions): Promise<Launch
     // Natives are extracted when the vanilla version is installed, so they live under
     // its id rather than the modded one.
     natives_directory: nativesDir(clientJarVersion),
-    launcher_name: LAUNCHER_NAME,
-    launcher_version: LAUNCHER_VERSION,
+    launcher_name: APP_NAME,
+    launcher_version: APP_VERSION,
     classpath: classpathEntries.join(path.delimiter),
     classpath_separator: path.delimiter,
     library_directory: librariesDir(),

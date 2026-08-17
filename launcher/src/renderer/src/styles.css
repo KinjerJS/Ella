@@ -1,17 +1,62 @@
+/*
+ * Ella's design system.
+ *
+ * Three rules hold the look together, and everything below follows from them:
+ *
+ *   Depth by layer, not by line. Surfaces step up (--surface-1 → 3) as they come forward.
+ *   Borders separate peers; elevation separates planes.
+ *
+ *   One accent, spent carefully. Violet marks the thing to do next and nothing else, so a
+ *   glance at any screen finds the primary action without reading.
+ *
+ *   Motion only where it explains. Panels rise as they arrive because they came from
+ *   somewhere; a live indicator pulses because it is live. Nothing animates for decoration,
+ *   and all of it stops under prefers-reduced-motion.
+ */
+
 :root {
-  --bg: #16161c;
-  --bg-raised: #1e1e26;
-  --bg-input: #26262f;
-  --border: #33333f;
-  --text: #e6e6ec;
-  --text-dim: #9a9aab;
-  --text-faint: #6b6b7b;
-  --accent: #7c6cf5;
-  --accent-dim: #5b4fd0;
-  --ok: #3fbf7f;
-  --warn: #e0a02c;
-  --error: #e05252;
-  --radius: 6px;
+  /* Surfaces, back to front. */
+  --bg: #0f0f14;
+  --surface-1: #16161d;
+  --surface-2: #1c1c26;
+  --surface-3: #23232f;
+  --surface-inset: #101015;
+
+  --border: #2b2b38;
+  --border-soft: #22222d;
+  --border-strong: #3b3b4c;
+
+  --text: #eeeef3;
+  --text-dim: #a4a4b8;
+  --text-faint: #6e6e84;
+
+  --accent: #8b7bff;
+  --accent-bright: #a99bff;
+  --accent-deep: #6a58e8;
+  --accent-soft: rgba(139, 123, 255, 0.14);
+  --accent-line: rgba(139, 123, 255, 0.32);
+
+  --ok: #45c98a;
+  --ok-soft: rgba(69, 201, 138, 0.13);
+  --warn: #e5a63a;
+  --warn-soft: rgba(229, 166, 58, 0.13);
+  --error: #ec5f5f;
+  --error-soft: rgba(236, 95, 95, 0.13);
+
+  --radius-sm: 6px;
+  --radius: 9px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 6px 20px -6px rgba(0, 0, 0, 0.55);
+  --shadow-3: 0 24px 60px -12px rgba(0, 0, 0, 0.7);
+  --glow: 0 6px 22px -8px rgba(139, 123, 255, 0.75);
+
+  --fast: 110ms;
+  --base: 180ms;
+  --slow: 300ms;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 * {
@@ -20,118 +65,260 @@
 
 body {
   margin: 0;
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
   font-size: 14px;
+  line-height: 1.5;
   color: var(--text);
   background: var(--bg);
   overflow: hidden;
   user-select: none;
+  /* Text at this size reads muddy without it on Windows. */
+  -webkit-font-smoothing: antialiased;
 }
+
+/* ---------------------------------------------------------------- controls */
 
 button {
   font: inherit;
-  color: inherit;
-  background: var(--bg-input);
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface-3);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  padding: 6px 13px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+  transition:
+    background var(--fast) var(--ease),
+    border-color var(--fast) var(--ease),
+    transform var(--fast) var(--ease),
+    box-shadow var(--fast) var(--ease);
 }
 button:hover:not(:disabled) {
-  border-color: var(--accent);
+  background: var(--border);
+  border-color: var(--border-strong);
+}
+button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 button:disabled {
-  opacity: 0.4;
+  opacity: 0.42;
   cursor: not-allowed;
 }
+
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-deep) 100%);
+  border-color: var(--accent-deep);
   color: #fff;
+  box-shadow: var(--shadow-1);
 }
 button.primary:hover:not(:disabled) {
-  background: var(--accent-dim);
+  background: linear-gradient(180deg, var(--accent-bright) 0%, var(--accent) 100%);
+  border-color: var(--accent);
+  box-shadow: var(--glow);
 }
+
+button.subtle {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+button.subtle:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
 button.danger:hover:not(:disabled) {
   border-color: var(--error);
+  background: var(--error-soft);
   color: var(--error);
 }
 
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+button.link:hover:not(:disabled) {
+  color: var(--accent-bright);
+}
+
+/* Square button holding an icon alone. */
+button.icon-only {
+  padding: 6px;
+  aspect-ratio: 1;
+}
+
+button svg:not(:only-child) {
+  margin-right: -1px;
+}
+
 input,
-select {
+select,
+textarea {
   font: inherit;
   color: inherit;
-  background: var(--bg-input);
+  background: var(--surface-inset);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
   width: 100%;
   user-select: text;
+  transition:
+    border-color var(--fast) var(--ease),
+    box-shadow var(--fast) var(--ease);
+}
+input::placeholder {
+  color: var(--text-faint);
+}
+input:hover:not(:disabled),
+select:hover:not(:disabled) {
+  border-color: var(--border-strong);
 }
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 input[type='checkbox'] {
   width: auto;
   accent-color: var(--accent);
+  cursor: pointer;
 }
 input[type='range'] {
   padding: 0;
   accent-color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+input[type='range']:focus {
+  box-shadow: none;
+}
+
+/* Keyboard users get a ring on everything; mouse users never see it. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button:focus-visible {
+  outline-offset: 1px;
+}
+
+/* Scrollbars, matched to the surfaces they sit on. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--radius-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  background-clip: content-box;
 }
 
 /* ---------------------------------------------------------------- layout */
 
 .app {
   display: grid;
-  grid-template-columns: 190px 1fr;
+  grid-template-columns: 218px 1fr;
   grid-template-rows: 1fr auto;
   height: 100vh;
+  /* A single light source behind the whole app; the sidebar and cards read as lit from
+     the top left rather than as flat blocks of colour. */
+  background:
+    radial-gradient(1100px 620px at 8% -8%, rgba(139, 123, 255, 0.09), transparent 60%),
+    var(--bg);
 }
 
 .sidebar {
   grid-row: 1 / 3;
-  background: var(--bg-raised);
-  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface-1) 0%, rgba(18, 18, 24, 0.92) 100%);
+  border-right: 1px solid var(--border-soft);
   display: flex;
   flex-direction: column;
-  padding: 14px 10px;
-  gap: 4px;
+  padding: 16px 12px 12px;
+  gap: 2px;
+  z-index: 1;
 }
 
 .brand {
-  font-size: 18px;
-  font-weight: 600;
-  padding: 4px 8px 14px;
-  letter-spacing: 0.4px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+  padding: 2px 6px 16px;
 }
-.brand span {
-  color: var(--accent);
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(145deg, var(--accent-bright), var(--accent-deep));
+  display: grid;
+  place-items: center;
+  color: #fff;
+  box-shadow: var(--glow);
+  flex: 0 0 auto;
+}
+.brand-text span {
+  color: var(--accent-bright);
+}
+
+/* Two steps quieter than the wordmark: the version is there to be read once, not to share
+   billing with the name. Selectable, because its whole purpose is being copied into a
+   bug report. */
+.brand-version {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+  margin-left: -3px;
+  user-select: text;
 }
 
 .project-chip {
   display: block;
   width: 100%;
   text-align: left;
-  background: var(--bg-input);
+  background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 7px 10px;
-  margin-bottom: 12px;
+  padding: 8px 11px;
+  margin-bottom: 14px;
   line-height: 1.35;
 }
 .project-chip:hover {
-  border-color: var(--accent);
+  background: var(--surface-3);
+  border-color: var(--accent-line);
 }
-.project-chip.empty {
+/* Not `.empty`: that class is the full-page empty state, and its 40px padding and centred
+   text were landing on this button too. */
+.project-chip.vacant {
   border-style: dashed;
+  color: var(--text-faint);
 }
 
 .project-chip-name {
   display: block;
-  font-weight: 500;
+  font-weight: 550;
   /* Long project names must not widen the sidebar. */
   overflow: hidden;
   text-overflow: ellipsis;
@@ -150,60 +337,116 @@ input[type='range'] {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
+  width: 100%;
   text-align: left;
+  justify-content: flex-start;
   background: none;
   border: none;
-  padding: 8px 10px;
-  border-radius: var(--radius);
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
   color: var(--text-dim);
+  font-weight: 500;
+  position: relative;
+}
+.nav-item:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+/* The active marker is drawn rather than bordered so it can round its own ends. */
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 17px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-bright);
 }
 
-/* Icons sit slightly dimmer than their label until the row is active, so the text stays
-   the thing you read first. */
+/* Icons sit dimmer than their label until the row is active, so the text stays the thing
+   you read first. */
 .nav-item svg {
-  opacity: 0.7;
+  opacity: 0.75;
   flex: 0 0 auto;
 }
-.nav-item.active svg,
+.nav-item.active svg {
+  opacity: 1;
+  color: var(--accent-bright);
+}
 .nav-item:hover svg {
   opacity: 1;
 }
 
-/* Any button holding an icon and a label lines them up the same way. */
-button svg {
-  vertical-align: -3px;
-}
-button svg:not(:only-child) {
-  margin-right: 6px;
-}
-.nav-item:hover {
-  background: var(--bg-input);
-  color: var(--text);
-}
-.nav-item.active {
-  background: var(--bg-input);
-  color: var(--text);
-  box-shadow: inset 2px 0 0 var(--accent);
+.nav-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* Pushes quick launch to the bottom of the sidebar whatever the nav length. */
+/* Count or state for the view behind the row: how many versions are installed, whether
+   the game is live. Reading it should not need opening the tab. */
+.nav-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  min-width: 19px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  color: var(--text-faint);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.nav-item.active .nav-badge {
+  background: rgba(139, 123, 255, 0.22);
+  color: var(--accent-bright);
+}
+.nav-badge.live {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.nav-badge.attention {
+  background: var(--accent);
+  color: #fff;
+}
+
 .sidebar-spacer {
   flex: 1;
   min-height: 12px;
 }
 
+/* ---------------------------------------------------------------- quick launch */
+
 .quick-launch {
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
   display: flex;
   flex-direction: column;
+  gap: 7px;
+}
+
+.quick-launch-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
   gap: 6px;
 }
 
 .quick-launch select {
   font-size: 13px;
-  padding: 5px 6px;
+  padding: 6px 7px;
 }
 
 .quick-launch button {
@@ -213,7 +456,14 @@ button svg:not(:only-child) {
 .quick-launch-note {
   font-size: 11px;
   color: var(--text-faint);
-  line-height: 1.35;
+  line-height: 1.4;
+  display: flex;
+  gap: 5px;
+  align-items: flex-start;
+}
+.quick-launch-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
 }
 .quick-launch-note.error {
   color: var(--error);
@@ -222,7 +472,7 @@ button svg:not(:only-child) {
 .quick-launch-error {
   font-size: 11px;
   color: var(--error);
-  line-height: 1.35;
+  line-height: 1.4;
   /* An error here can be a long path or stack line; keep it from stretching the sidebar. */
   max-height: 60px;
   overflow-y: auto;
@@ -232,59 +482,56 @@ button svg:not(:only-child) {
 .quick-launch-empty {
   font-size: 11px;
   color: var(--text-faint);
-  line-height: 1.4;
+  line-height: 1.45;
 }
+
+/* ---------------------------------------------------------------- content */
 
 .content {
   overflow-y: auto;
-  padding: 22px 26px;
+  padding: 26px 30px 34px;
 }
 
-.statusbar {
-  grid-column: 2;
-  border-top: 1px solid var(--border);
-  background: var(--bg-raised);
-  padding: 6px 14px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  font-size: 12px;
-  color: var(--text-dim);
+/* Every view arrives the same way, so switching tabs reads as movement rather than as a
+   repaint. */
+.view {
+  max-width: 1100px;
+  animation: view-in var(--slow) var(--ease);
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-  margin-right: 6px;
-  background: var(--text-faint);
-}
-.dot.connected {
-  background: var(--ok);
-}
-.dot.running {
-  background: var(--warn);
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
-/* ---------------------------------------------------------------- pieces */
+.page-head {
+  margin-bottom: 22px;
+}
+.page-head .row {
+  align-items: flex-start;
+}
 
 h1 {
-  font-size: 20px;
-  margin: 0 0 4px;
-  font-weight: 600;
+  font-size: 23px;
+  line-height: 1.25;
+  margin: 0 0 5px;
+  font-weight: 620;
+  letter-spacing: -0.3px;
 }
 h2 {
-  font-size: 14px;
-  margin: 22px 0 10px;
-  color: var(--text-dim);
-  font-weight: 600;
+  font-size: 11.5px;
+  margin: 26px 0 11px;
+  color: var(--text-faint);
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.9px;
 }
 .subtitle {
   color: var(--text-dim);
-  margin: 0 0 18px;
+  margin: 0;
+  max-width: 68ch;
 }
 
 .row {
@@ -296,12 +543,35 @@ h2 {
   flex: 1;
 }
 
+/* ---------------------------------------------------------------- surfaces */
+
 .card {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
+  background: var(--surface-1);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
-  padding: 12px 14px;
-  margin-bottom: 8px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+
+.card.interactive {
+  cursor: pointer;
+  transition:
+    border-color var(--base) var(--ease),
+    background var(--base) var(--ease),
+    transform var(--base) var(--ease);
+}
+.card.interactive:hover {
+  border-color: var(--accent-line);
+  background: var(--surface-2);
+  transform: translateY(-1px);
+}
+
+.card .name {
+  font-weight: 550;
+}
+.card .meta {
+  color: var(--text-faint);
+  font-size: 12px;
 }
 
 .list {
@@ -314,17 +584,22 @@ h2 {
   display: flex;
   align-items: center;
   gap: 12px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 9px 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px 13px;
   cursor: pointer;
+  transition:
+    border-color var(--fast) var(--ease),
+    background var(--fast) var(--ease);
 }
 .list-row:hover {
-  border-color: var(--accent-dim);
+  background: var(--surface-2);
+  border-color: var(--border);
 }
 .list-row.selected {
   border-color: var(--accent);
+  background: var(--accent-soft);
 }
 .list-row .name {
   font-weight: 500;
@@ -336,47 +611,79 @@ h2 {
 
 .badge {
   font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
+  background: var(--surface-2);
   color: var(--text-dim);
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 .badge.ok {
   color: var(--ok);
-  border-color: var(--ok);
+  border-color: transparent;
+  background: var(--ok-soft);
 }
 .badge.warn {
   color: var(--warn);
-  border-color: var(--warn);
+  border-color: transparent;
+  background: var(--warn-soft);
 }
 .badge.error {
   color: var(--error);
-  border-color: var(--error);
+  border-color: transparent;
+  background: var(--error-soft);
+}
+.badge.accent {
+  color: var(--accent-bright);
+  border-color: transparent;
+  background: var(--accent-soft);
 }
 
+.divider {
+  height: 1px;
+  background: var(--border-soft);
+  margin: 18px 0;
+}
+
+/* ---------------------------------------------------------------- fields */
+
 .field {
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 .field label {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 5px;
   color: var(--text-dim);
   font-size: 12px;
+  font-weight: 500;
 }
-.field .help {
+.field .help,
+.help {
   color: var(--text-faint);
-  font-size: 11px;
-  margin-top: 3px;
-  line-height: 1.4;
+  font-size: 11.5px;
+  margin-top: 4px;
+  line-height: 1.45;
 }
 .field.disabled {
   opacity: 0.45;
 }
 
+/* Explanatory line under a section heading. Sized in pixels rather than `ch` because at
+   this font size a `ch` budget produces a column far narrower than it reads as. */
+.section-note {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  line-height: 1.55;
+  max-width: 640px;
+  margin: -4px 0 12px;
+}
+
 .field-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 0 18px;
+  gap: 0 20px;
 }
 
 .inline {
@@ -385,69 +692,515 @@ h2 {
   gap: 8px;
 }
 
+/* ---------------------------------------------------------------- messages */
+
 .warning {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--warn-soft);
   border-left: 3px solid var(--warn);
-  background: rgba(224, 160, 44, 0.08);
-  padding: 9px 12px;
-  border-radius: 0 var(--radius) var(--radius) 0;
-  margin-bottom: 8px;
+  background: var(--warn-soft);
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
   font-size: 13px;
   line-height: 1.5;
 }
+.warning svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--warn);
+}
 .warning.error {
-  border-color: var(--error);
-  background: rgba(224, 82, 82, 0.08);
+  border-color: var(--error-soft);
+  border-left-color: var(--error);
+  background: var(--error-soft);
 }
 
+/* Pushed to the right edge so the text keeps the full width, and quiet until reached for:
+   the message is what matters, the way out is what you look for second. */
+.warning-close {
+  margin-left: auto;
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  padding: 1px;
+  color: var(--text-faint);
+}
+.warning-close:hover {
+  background: none;
+  color: var(--text);
+}
+/* Outranks the tone rules below, which colour every icon inside a banner. */
+.warning button.warning-close svg {
+  margin-top: 0;
+  color: inherit;
+}
+.warning.error svg {
+  color: var(--error);
+}
+.warning.info {
+  border-color: var(--accent-soft);
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+.warning.info svg {
+  color: var(--accent-bright);
+}
+
+/* Empty is a place to act from, not a dead end: an icon to orient, a line saying what is
+   missing, and the button that fixes it. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  padding: 46px 24px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.empty-state-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: var(--radius);
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  margin-bottom: 10px;
+}
+
+.empty-state-title {
+  font-weight: 550;
+  font-size: 15px;
+}
+
+.empty-state-text {
+  color: var(--text-faint);
+  font-size: 13px;
+  max-width: 46ch;
+  line-height: 1.5;
+}
+
+.empty-state button {
+  margin-top: 14px;
+}
+
+/* Kept for the few places that want a bare line rather than the full panel. */
 .empty {
   color: var(--text-faint);
   text-align: center;
   padding: 40px 0;
 }
 
-.split {
-  display: grid;
-  grid-template-columns: 280px 1fr;
-  gap: 20px;
-  align-items: start;
+/* ---------------------------------------------------------------- guide */
+
+/*
+ * The setup guide: an ordered list of what has to be true before live editing works, each
+ * step reading its own state off the session rather than being ticked by hand. Steps are
+ * never hidden once done — seeing the whole path is what makes the order obvious.
+ */
+.guide {
+  display: flex;
+  flex-direction: column;
+  /* Narrower than the page: the action button belongs beside the step it acts on, not
+     stranded against the far edge of a wide window. */
+  max-width: 780px;
 }
 
-.console {
-  background: #0f0f14;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px;
-  font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 11px;
+.guide-step {
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  gap: 14px;
+  align-items: start;
+  padding: 13px 4px;
+  position: relative;
+}
+/* The rail joins the step markers, so the list reads as one path rather than five cards. */
+.guide-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  top: 40px;
+  bottom: -6px;
+  width: 2px;
+  background: var(--border);
+  border-radius: var(--radius-pill);
+}
+.guide-step.done:not(:last-child)::before {
+  background: rgba(69, 201, 138, 0.35);
+}
+
+.guide-marker {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-pill);
+  display: grid;
+  place-items: center;
+  font-size: 12.5px;
+  font-weight: 650;
+  border: 1.5px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-faint);
+  z-index: 1;
+  transition:
+    background var(--base) var(--ease),
+    border-color var(--base) var(--ease),
+    color var(--base) var(--ease);
+}
+.guide-step.done .guide-marker {
+  background: var(--ok-soft);
+  border-color: transparent;
+  color: var(--ok);
+}
+.guide-step.current .guide-marker {
+  background: linear-gradient(145deg, var(--accent-bright), var(--accent-deep));
+  border-color: transparent;
+  color: #fff;
+  box-shadow: var(--glow);
+}
+
+.guide-title {
+  font-weight: 550;
+  padding-top: 4px;
+}
+.guide-step.done .guide-title {
+  color: var(--text-dim);
+}
+
+.guide-why {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  margin-top: 2px;
   line-height: 1.5;
-  height: 220px;
-  overflow-y: auto;
-  user-select: text;
-  white-space: pre-wrap;
-  word-break: break-all;
+  max-width: 58ch;
 }
-.console .warn {
-  color: var(--warn);
+
+.guide-step .guide-action {
+  margin-top: 2px;
 }
-.console .error {
-  color: var(--error);
+/* Only the step you are on gets the accent; the rest stay quiet so there is exactly one
+   obvious thing to click. */
+.guide-step.todo .guide-action {
+  opacity: 0.55;
+}
+
+/* ---------------------------------------------------------------- home */
+
+.hero {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(620px 220px at 12% 0%, rgba(139, 123, 255, 0.16), transparent 70%),
+    var(--surface-1);
+  padding: 24px 26px;
+  margin-bottom: 20px;
+}
+
+.hero h1 {
+  font-size: 26px;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.stat {
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 11px 13px;
+}
+
+.stat-value {
+  font-size: 19px;
+  font-weight: 620;
+  letter-spacing: -0.3px;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.stat-value.ok {
+  color: var(--ok);
+}
+.stat-value.dim {
+  color: var(--text-faint);
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 550;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.action-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  text-align: left;
+  justify-content: flex-start;
+  background: var(--surface-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 14px;
+  white-space: normal;
+}
+.action-card:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--accent-line);
+  transform: translateY(-1px);
+}
+
+.action-card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  flex: 0 0 auto;
+}
+
+/* A project name is user-supplied and can be any length; it must not stretch the grid. */
+.action-card-title {
+  display: block;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-card-text {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-weight: 400;
+  line-height: 1.45;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------- status bar */
+
+.statusbar {
+  grid-column: 2;
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface-1);
+  padding: 7px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.statusbar-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--text-faint);
+  flex: 0 0 auto;
+}
+.dot.connected {
+  background: var(--ok);
+  /* Live, and the only thing on screen that moves on its own. */
+  animation: pulse 2.4s var(--ease) infinite;
+}
+.dot.running {
+  background: var(--warn);
+  animation: pulse 1.1s var(--ease) infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 currentColor;
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 4px transparent;
+    opacity: 0.55;
+  }
 }
 
 .progress {
   height: 4px;
-  background: var(--bg-input);
-  border-radius: 2px;
+  background: var(--surface-3);
+  border-radius: var(--radius-pill);
   overflow: hidden;
 }
 .progress > div {
   height: 100%;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+  transition: width var(--base) var(--ease);
+}
+
+/* ---------------------------------------------------------------- toasts */
+
+/*
+ * Confirmations and failures both land here. Inline banners were being missed: they render
+ * wherever the action happened, which is often scrolled out of view by the time it
+ * finishes.
+ */
+.toast-stack {
+  position: fixed;
+  right: 18px;
+  bottom: 52px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  min-width: 260px;
+  max-width: 400px;
+  padding: 11px 13px;
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-3);
+  pointer-events: auto;
+  animation: toast-in var(--base) var(--ease);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px) scale(0.97);
+  }
+}
+
+.toast.ok {
+  border-color: rgba(69, 201, 138, 0.4);
+}
+.toast.error {
+  border-color: rgba(236, 95, 95, 0.45);
+}
+
+.toast-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.toast.ok .toast-icon {
+  color: var(--ok);
+}
+.toast.error .toast-icon {
+  color: var(--error);
+}
+.toast.info .toast-icon {
+  color: var(--accent-bright);
+}
+
+.toast-body {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.45;
+  user-select: text;
+  word-break: break-word;
+}
+
+.toast-close {
+  background: none;
+  border: none;
+  padding: 2px;
+  color: var(--text-faint);
+  flex: 0 0 auto;
+}
+.toast-close:hover {
+  color: var(--text);
+  background: none;
+}
+
+/* The one action in a toast, so it is the one thing in it that reads as pressable. */
+.toast-undo {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+}
+.toast-undo:hover:not(:disabled) {
   background: var(--accent);
-  transition: width 0.15s;
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* The remaining time, drawn rather than left to be guessed at. A toast that can be acted
+   on and simply disappears reads as one that was missed. */
+.toast:has(.toast-undo) {
+  position: relative;
+  overflow: hidden;
+}
+
+.toast-life {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  transform-origin: left;
+  background: var(--accent-line);
+  animation: toast-life linear forwards;
+}
+
+@keyframes toast-life {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-life {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------- entries */
+
+.split {
+  display: grid;
+  grid-template-columns: 272px 1fr;
+  gap: 24px;
+  align-items: start;
 }
 
 .entry-identity {
   display: flex;
-  gap: 16px;
+  gap: 18px;
   align-items: flex-start;
   margin-bottom: 4px;
 }
@@ -456,31 +1209,52 @@ h2 {
   flex: 0 0 auto;
   width: 132px;
   height: 132px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
-  background: var(--bg-raised);
+  background:
+    radial-gradient(90px 90px at 50% 38%, rgba(139, 123, 255, 0.1), transparent 70%),
+    var(--surface-1);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
 }
 
+/* Turnable previews: the cursor is the only affordance telling you the model can be
+   dragged, and touch-action keeps a drag from scrolling the panel instead of rotating. */
+.model-preview-turnable {
+  cursor: grab;
+  touch-action: none;
+  outline-offset: -2px;
+}
+
+.model-preview-turnable:active {
+  cursor: grabbing;
+}
+
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
   gap: 10px;
 }
 
 .entry-card {
   display: block;
   text-align: center;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
+  background: var(--surface-1);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
-  padding: 10px 8px;
+  padding: 12px 10px 10px;
+  position: relative;
+  transition:
+    border-color var(--base) var(--ease),
+    background var(--base) var(--ease),
+    transform var(--base) var(--ease);
 }
 .entry-card:hover {
-  border-color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--surface-2);
+  transform: translateY(-2px);
 }
 
 .entry-card-preview {
@@ -488,11 +1262,11 @@ h2 {
   align-items: center;
   justify-content: center;
   height: 112px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .entry-card-name {
-  font-weight: 500;
+  font-weight: 550;
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -505,14 +1279,31 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-top: 1px;
 }
+
+/* Kind marker in the corner of a card: which of the two things this is, without spending
+   a line of text on it. */
+.entry-card-kind {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  color: var(--text-faint);
+  opacity: 0.6;
+}
+.entry-card:hover .entry-card-kind {
+  opacity: 1;
+  color: var(--accent-bright);
+}
+
+/* ---------------------------------------------------------------- textures */
 
 .texture-preview {
   width: 96px;
   height: 96px;
   flex: 0 0 auto;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   /* Checkerboard behind the image so transparent pixels read as transparent rather
      than as the panel background. */
   background-image:
@@ -561,26 +1352,56 @@ h2 {
   display: flex;
   gap: 12px;
   align-items: center;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
 }
 
 .texture-key {
   font-size: 13px;
-  color: var(--accent);
+  font-weight: 550;
+  color: var(--accent-bright);
 }
 
-button.link {
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--accent);
-  text-decoration: underline;
+/* ---------------------------------------------------------------- console */
+
+.console {
+  background: var(--surface-inset);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 12px;
+  font-family: 'Cascadia Mono', 'JetBrains Mono', Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  height: 220px;
+  overflow-y: auto;
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
-button.link:hover:not(:disabled) {
-  color: var(--text);
+.console .warn {
+  color: var(--warn);
+}
+.console .error {
+  color: var(--error);
+}
+
+.crash-console {
+  height: 300px;
+}
+
+/* The logs view is the whole page, so the console grows to fill it rather than sitting in
+   a fixed box. */
+.logs-console {
+  height: calc(100vh - 268px);
+  min-height: 240px;
+}
+
+.scroll-list {
+  max-height: 460px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 /* ---------------------------------------------------------------- modal */
@@ -588,31 +1409,47 @@ button.link:hover:not(:disabled) {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(6, 6, 9, 0.7);
+  backdrop-filter: blur(3px);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 32px;
+  padding: 34px;
   z-index: 100;
+  animation: fade-in var(--base) var(--ease);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .modal {
-  background: var(--bg-raised);
+  background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   width: min(900px, 100%);
   max-height: 100%;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-3);
+  animation: modal-in var(--base) var(--ease);
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
 }
 
 .modal-header {
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .modal-title {
@@ -630,7 +1467,7 @@ button.link:hover:not(:disabled) {
 }
 
 .modal-body {
-  padding: 14px 16px;
+  padding: 16px 18px;
   overflow-y: auto;
   flex: 1;
   min-height: 0;
@@ -640,16 +1477,63 @@ button.link:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
+  padding: 13px 18px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* The version dialog carries far less than a crash report; a full-width sheet for a
+   handful of rows would read as an alarm out of proportion to what it is. */
+.modal.narrow {
+  width: min(640px, 100%);
+}
+
+/* The crash subtitle is a fault; a version change is not, and painting it in the error
+   colour would make a routine confirmation look like something went wrong. */
+.modal-subtitle.plain {
+  color: var(--text-dim);
+}
+
+.modal-footer-note {
+  padding: 0 18px 13px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.version-swap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.version-swap-to {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.compat-heading {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  margin: 14px 0 8px;
+}
+
+/* Wraps rather than truncating: the sentence is the whole reason the row is there. */
+.compat-detail {
+  color: var(--text-dim);
+  font-size: 12px;
+  min-width: 0;
 }
 
 .crash-env {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 3px 14px;
+  gap: 4px 16px;
   font-size: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
   user-select: text;
 }
 
@@ -667,10 +1551,12 @@ button.link:hover:not(:disabled) {
   word-break: break-all;
 }
 
+/* ---------------------------------------------------------------- tabs */
+
 .tabs {
   display: flex;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: 3px;
+  margin-bottom: 10px;
 }
 
 .tab {
@@ -678,10 +1564,12 @@ button.link:hover:not(:disabled) {
   border: none;
   border-bottom: 2px solid transparent;
   border-radius: 0;
-  padding: 5px 10px;
+  padding: 6px 11px;
   color: var(--text-dim);
+  font-weight: 500;
 }
 .tab:hover:not(:disabled) {
+  background: none;
   color: var(--text);
 }
 .tab.active {
@@ -689,19 +1577,95 @@ button.link:hover:not(:disabled) {
   border-bottom-color: var(--accent);
 }
 
-.crash-console {
-  height: 300px;
+/* Segmented control: for switching how the same data is shown, where tabs would imply
+   different content. */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.segmented button {
+  background: none;
+  border: none;
+  padding: 4px 11px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  border-radius: 5px;
+}
+.segmented button:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.segmented button.active {
+  background: var(--surface-3);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
 }
 
-/* The logs view is the whole page, so the console grows to fill it rather than
-   sitting in a fixed box. */
-.logs-console {
-  height: calc(100vh - 260px);
-  min-height: 240px;
+/* Splits the available width evenly, for a choice that is the panel's own first question
+   rather than a control tucked beside a heading. */
+.segmented.fill {
+  display: flex;
+  width: 100%;
+}
+.segmented.fill button {
+  flex: 1;
+  min-width: 0;
 }
 
-.scroll-list {
-  max-height: 460px;
-  overflow-y: auto;
-  padding-right: 4px;
+/* Shown while a settings change is on its way to disk and to the game. The controls stay
+   live behind it — this reports progress, it does not gate anything. */
+.save-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  padding: 3px 11px 3px 8px;
+  animation: fade-in var(--fast) var(--ease);
+}
+
+.spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(169, 155, 255, 0.28);
+  border-top-color: var(--accent-bright);
+  animation: spin 700ms linear infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Keyboard shortcut hint, e.g. in the navigation tooltips. */
+.kbd {
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

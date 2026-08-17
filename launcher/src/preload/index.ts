@@ -40,14 +40,17 @@ const api: EllaApi = {
 
   projects: {
     list: () => invoke(CHANNELS.projectsList),
-    create: (name, namespace, targetVersions) =>
-      invoke(CHANNELS.projectsCreate, name, namespace, targetVersions),
+    create: (name, namespace, targetVersion) =>
+      invoke(CHANNELS.projectsCreate, name, namespace, targetVersion),
     open: (root) => invoke(CHANNELS.projectsOpen, root),
     current: () => invoke(CHANNELS.projectsCurrent),
     measure: () => invoke(CHANNELS.projectsMeasure),
     delete: (root) => invoke(CHANNELS.projectsDelete, root),
     close: () => invoke(CHANNELS.projectsClose),
     updateInfo: (changes) => invoke(CHANNELS.projectsUpdateInfo, changes),
+    planVersionChange: (versionId) => invoke(CHANNELS.projectsPlanVersionChange, versionId),
+    applyVersionChange: (versionId, migrate) =>
+      invoke(CHANNELS.projectsApplyVersionChange, versionId, migrate),
   },
 
   entries: {
@@ -64,9 +67,14 @@ const api: EllaApi = {
       invoke(CHANNELS.entriesRemoveTexture, id, key, deleteFile),
     setParticleTexture: (id, key) => invoke(CHANNELS.entriesSetParticle, id, key),
     revealTexture: (id) => invoke(CHANNELS.entriesRevealTexture, id),
+    removeModelParent: (id) => invoke(CHANNELS.entriesRemoveModelParent, id),
     previews: () => invoke(CHANNELS.entriesPreviews),
     give: (id) => invoke(CHANNELS.entriesGive, id),
     place: (id) => invoke(CHANNELS.entriesPlace, id),
+  },
+
+  undo: {
+    run: (token) => invoke(CHANNELS.undoRun, token),
   },
 
   game: {
@@ -83,6 +91,7 @@ const api: EllaApi = {
   },
 
   blockbench: {
+    resolve: () => invoke(CHANNELS.blockbenchResolve),
     pluginStatus: () => invoke(CHANNELS.blockbenchPluginStatus),
     installPlugin: () => invoke(CHANNELS.blockbenchInstallPlugin),
   },
@@ -105,6 +114,7 @@ const api: EllaApi = {
     progress: (handler) => subscribe(EVENTS.progress, handler),
     crash: (handler) => subscribe(EVENTS.crash, handler),
     files: (handler) => subscribe(EVENTS.files, handler),
+    undo: (handler) => subscribe(EVENTS.undo, handler),
   },
 };
 

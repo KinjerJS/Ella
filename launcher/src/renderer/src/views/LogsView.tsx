@@ -46,12 +46,22 @@ export function LogsView({ session }: { session: SessionHook }) {
     return tally;
   }, [session.lines]);
 
+  const connected = session.state.status === 'connected';
+  const running = session.state.status !== 'stopped';
+
   return (
-    <div>
-      <h1>{t('nav.logs')}</h1>
-      <p className="subtitle">
-        {session.state.status === 'stopped' ? t('game.disconnected') : t('game.connected')}
-      </p>
+    <div className="view">
+      <div className="page-head">
+        <h1>{t('nav.logs')}</h1>
+        <p className="subtitle inline">
+          <span className={`dot${connected ? ' connected' : running ? ' running' : ''}`} />
+          {connected
+            ? t('game.connected')
+            : running
+              ? t('versions.launching')
+              : t('game.disconnected')}
+        </p>
+      </div>
 
       <div className="row" style={{ marginBottom: 10 }}>
         <input

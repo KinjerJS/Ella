@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { inflateSync } from 'node:zlib';
 import path from 'node:path';
@@ -10,6 +10,7 @@ import {
   slotRedirectModel,
   buildLangFiles,
   writeSlotNamespace,
+  writeEntrySlot,
   packMcmeta,
   fallbackPackFormat,
   SLOT_NAMESPACE,
@@ -255,6 +256,86 @@ test('regenerating the slot namespace removes stale files', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Targeted slot writes
+// ---------------------------------------------------------------------------
+
+/**
+ * A settings change takes the cheap path: one slot rewritten rather than the whole
+ * namespace. These pin the two properties that makes safe — it writes the slot it was
+ * given, and it leaves every other slot exactly as it was.
+ */
+test('writing one entry slot updates only that slot', async () => {
+  const root = path.join(workspace, 'targeted');
+  const base = { ...emptyProject('P', 'proj'), slotPool: { block: 3, item: 1 } };
+
+  const project: typeof base = {
+    ...base,
+    entries: [
+      {
+        ...base.entries[0],
+        id: 'lamp',
+        kind: 'block',
+        slot: 1,
+        displayName: { en: 'Lamp' },
+        settings: { renderLayer: 'solid' },
+      } as (typeof base.entries)[number],
+    ],
+  };
+
+  await writeSlotNamespace(root, project, 34);
+
+  const modelAt = (slot: number): string =>
+    path.join(root, `pack/assets/ella/models/block/slot_${String(slot).padStart(3, '0')}.json`);
+
+  const untouchedBefore = await readFile(modelAt(0), 'utf8');
+
+  const patched = {
+    ...project.entries[0],
+    settings: { renderLayer: 'translucent' },
+  };
+  const written = await writeEntrySlot(root, project, patched);
+
+  assert.equal(written, true);
+  assert.equal(
+    JSON.parse(await readFile(modelAt(1), 'utf8')).render_type,
+    'minecraft:translucent',
+    'the entry’s own slot must pick up the new render layer',
+  );
+  assert.equal(
+    await readFile(modelAt(0), 'utf8'),
+    untouchedBefore,
+    'no other slot may be rewritten',
+  );
+
+  // Both copies of a block model stay in step — the pair is what lets one blockstate
+  // serve versions either side of 1.13.
+  assert.equal(
+    await readFile(modelAt(1), 'utf8'),
+    await readFile(
+      path.join(root, 'pack/assets/ella/models/block/block/slot_001.json'),
+      'utf8',
+    ),
+  );
+});
+
+test('an unbound entry has no slot to write', async () => {
+  const root = path.join(workspace, 'targeted-unbound');
+  const project = { ...emptyProject('P', 'proj'), slotPool: { block: 1, item: 1 } };
+  await writeSlotNamespace(root, project, 34);
+
+  const entry = {
+    id: 'floating',
+    kind: 'block' as const,
+    slot: null,
+    displayName: { en: 'Floating' },
+    settings: {},
+    model: { source: 'json' as const, path: 'x.json', output: 'x.json' },
+  };
+
+  assert.equal(await writeEntrySlot(root, project, entry), false);
+});
+
+// ---------------------------------------------------------------------------
 // Identifiers
 // ---------------------------------------------------------------------------
 
@@ -307,15 +388,39 @@ test('reports an exhausted pool instead of returning a bad slot', () => {
 // ---------------------------------------------------------------------------
 
 test('creates a project on disk and reads it back', async () => {
-  const { project, root } = await createProject('My Project', 'myproject', ['1.12.2']);
+  const { project, root } = await createProject('My Project', 'myproject', '1.12.2');
   assert.equal(project.namespace, 'myproject');
 
   const reloaded = await loadProject(root);
   assert.equal(reloaded.name, 'My Project');
-  assert.deepEqual(reloaded.targetVersions, ['1.12.2']);
+  assert.equal(reloaded.targetVersion, '1.12.2');
 
   const mcmeta = JSON.parse(await readFile(path.join(root, 'pack', 'pack.mcmeta'), 'utf8'));
   assert.ok(mcmeta.pack.pack_format > 0);
+});
+
+test('a project written before targetVersion adopts its first old target', async () => {
+  // `targetVersions` was an array nothing ever read past creation. Its first entry is the
+  // version the author picked when they created the project, which is exactly what the
+  // single field now means — discarding it would silently unbind every existing project.
+  const { root } = await createProject('Legacy', 'legacyproj');
+  const manifest = JSON.parse(await readFile(path.join(root, 'project.json'), 'utf8'));
+
+  delete manifest.targetVersion;
+  manifest.targetVersions = ['1.12.2', '1.21.1'];
+  await writeFile(path.join(root, 'project.json'), JSON.stringify(manifest, null, 2), 'utf8');
+
+  assert.equal((await loadProject(root)).targetVersion, '1.12.2');
+});
+
+test('a project with no version at all loads unbound rather than failing', async () => {
+  const { root } = await createProject('Bare', 'bareproj');
+  const manifest = JSON.parse(await readFile(path.join(root, 'project.json'), 'utf8'));
+
+  delete manifest.targetVersion;
+  await writeFile(path.join(root, 'project.json'), JSON.stringify(manifest, null, 2), 'utf8');
+
+  assert.equal((await loadProject(root)).targetVersion, null);
 });
 
 test('rejects an invalid namespace', async () => {
@@ -405,7 +510,7 @@ test('deleting an entry keeps its files unless asked otherwise', async () => {
   });
 
   const modelPath = path.join(root, 'pack/assets/delproj/models/item/gem.json');
-  const after = await deleteEntry(root, withEntry, 'gem');
+  const { project: after } = await deleteEntry(root, withEntry, 'gem');
   assert.equal(after.entries.length, 0);
   // The author's model is their work; a mis-click must not destroy it.
   assert.ok(await readFile(modelPath).then(() => true, () => false), 'model still on disk');
