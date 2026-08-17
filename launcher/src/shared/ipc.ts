@@ -55,6 +55,36 @@ export interface ProjectSummaryDto {
   namespace: string;
   root: string;
   entryCount: number;
+  /** The Minecraft version it is authored against, or null when unbound. */
+  targetVersion: string | null;
+}
+
+/** One thing in the project's files that a version change would break. */
+export interface CompatFindingDto {
+  entryId: string;
+  /** A {@link CompatIssueId}; also the suffix of its `compat.issue.*` message. */
+  issue: string;
+  /** True when Ella can rewrite the file itself. */
+  fixable: boolean;
+  /** Interpolation values for the message. */
+  detail: Record<string, string | number>;
+}
+
+export interface VersionChangePlanDto {
+  /** The version the project is bound to, or null when nothing has bound it yet. */
+  from: string | null;
+  to: string;
+  /** True when this launch is a change worth stopping for. */
+  needsConfirmation: boolean;
+  findings: CompatFindingDto[];
+  /** How many findings Ella can rewrite the files for. */
+  fixable: number;
+}
+
+export interface VersionChangeResultDto {
+  project: EllaProject;
+  /** Entry ids whose model files were rewritten. */
+  migrated: string[];
 }
 
 export interface TextureVariableDto {
@@ -153,6 +183,20 @@ export interface ExportResultDto {
   bytes: number;
 }
 
+/**
+ * An action that can still be taken back, pushed as an event the moment it happens.
+ *
+ * Sent rather than returned so the offer is independent of whichever call produced it: the
+ * notification layer subscribes once, and a handler becomes undoable by registering an
+ * inverse instead of by changing its signature.
+ */
+export interface UndoOfferDto {
+  token: string;
+  /** i18n key describing what happened; the renderer translates it. */
+  messageKey: string;
+  values: Record<string, string | number>;
+}
+
 export interface SettingsPatchResultDto {
   applied: string[];
   ignored: string[];
@@ -190,7 +234,7 @@ export interface EllaApi {
 
   projects: {
     list(): Promise<ProjectSummaryDto[]>;
-    create(name: string, namespace: string, targetVersions: string[]): Promise<
+    create(name: string, namespace: string, targetVersion: string | null): Promise<
       Result<{ project: EllaProject; root: string }>
     >;
     open(root: string): Promise<Result<EllaProject>>;
@@ -199,12 +243,24 @@ export interface EllaApi {
     measure(): Promise<Result<ProjectFootprintDto>>;
     delete(root: string): Promise<Result<void>>;
     close(): Promise<Result<void>>;
-    /** Edits the open project's name, namespace and target versions. */
+    /** Edits the open project's name, namespace and target version. */
     updateInfo(changes: {
       name?: string;
       namespace?: string;
-      targetVersions?: string[];
+      /** Null unbinds it; omitted leaves it alone. */
+      targetVersion?: string | null;
     }): Promise<Result<EllaProject>>;
+    /**
+     * What launching `versionId` would mean for the open project, without changing
+     * anything. Reads every entry's model, so it is the answer for the files as they
+     * actually are rather than as the manifest describes them.
+     */
+    planVersionChange(versionId: string): Promise<Result<VersionChangePlanDto>>;
+    /** Binds the project to `versionId`, rewriting the models that need it when asked. */
+    applyVersionChange(
+      versionId: string,
+      migrate: boolean,
+    ): Promise<Result<VersionChangeResultDto>>;
   };
 
   entries: {
@@ -236,10 +292,20 @@ export interface EllaApi {
     /** Points the model's `particle` variable at this one, or clears it with null. */
     setParticleTexture(id: string, key: string | null): Promise<Result<TextureVariableDto[]>>;
     revealTexture(id: string): Promise<Result<void>>;
+    /**
+     * Strips a `parent` that would override the model's own geometry on 1.8.x.
+     * Resolves to the removed parent, or null when there was nothing to fix.
+     */
+    removeModelParent(id: string): Promise<Result<string | null>>;
     /** Preview data for every entry, batched for the card grid. */
     previews(): Promise<Result<EntryPreviewDto[]>>;
     give(id: string): Promise<Result<void>>;
     place(id: string): Promise<Result<void>>;
+  };
+
+  undo: {
+    /** Reverses the action a {@link UndoOfferDto} names. One-shot. */
+    run(token: string): Promise<Result<void>>;
   };
 
   game: {
@@ -256,6 +322,13 @@ export interface EllaApi {
   };
 
   blockbench: {
+    /**
+     * The executable Ella would actually launch, or null when it cannot find one.
+     *
+     * Not the same as the configured path: Blockbench is usually auto-detected, so an
+     * empty setting says nothing about whether opening a model will work.
+     */
+    resolve(): Promise<string | null>;
     pluginStatus(): Promise<{ installed: boolean; outdated: boolean; installedPath: string }>;
     installPlugin(): Promise<Result<string>>;
   };
@@ -284,6 +357,8 @@ export interface EllaApi {
     crash(handler: (diagnostics: CrashDiagnosticsDto) => void): () => void;
     /** Fires when watched model or texture files change on disk. */
     files(handler: (paths: string[]) => void): () => void;
+    /** Fires after a change that can still be taken back. */
+    undo(handler: (offer: UndoOfferDto) => void): () => void;
   };
 }
 
@@ -305,6 +380,8 @@ export const CHANNELS = {
   projectsDelete: 'projects:delete',
   projectsClose: 'projects:close',
   projectsUpdateInfo: 'projects:updateInfo',
+  projectsPlanVersionChange: 'projects:planVersionChange',
+  projectsApplyVersionChange: 'projects:applyVersionChange',
   entriesCreate: 'entries:create',
   entriesUpdate: 'entries:update',
   entriesDelete: 'entries:delete',
@@ -317,9 +394,11 @@ export const CHANNELS = {
   entriesRemoveTexture: 'entries:removeTexture',
   entriesSetParticle: 'entries:setParticle',
   entriesRevealTexture: 'entries:revealTexture',
+  entriesRemoveModelParent: 'entries:removeModelParent',
   entriesPreviews: 'entries:previews',
   entriesGive: 'entries:give',
   entriesPlace: 'entries:place',
+  undoRun: 'undo:run',
   gameLaunch: 'game:launch',
   gameStop: 'game:stop',
   gameState: 'game:state',
@@ -327,6 +406,7 @@ export const CHANNELS = {
   exportValidate: 'export:validate',
   exportRun: 'export:run',
   exportSuggestName: 'export:suggestName',
+  blockbenchResolve: 'blockbench:resolve',
   blockbenchPluginStatus: 'blockbench:pluginStatus',
   blockbenchInstallPlugin: 'blockbench:installPlugin',
   crashCopy: 'crash:copy',
@@ -343,4 +423,5 @@ export const EVENTS = {
   progress: 'event:progress',
   crash: 'event:crash',
   files: 'event:files',
+  undo: 'event:undo',
 } as const;

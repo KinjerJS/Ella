@@ -34,9 +34,33 @@ export interface EllaProject {
   formatVersion: number;
   name: string;
   namespace: string;
-  targetVersions: string[];
+  /**
+   * The Minecraft version this project is authored against, or null until a launch binds
+   * one. It is what the launcher preselects when the project is opened, and what a launch
+   * on any other version is checked against — see shared/version-compat.ts.
+   */
+  targetVersion: string | null;
   slotPool: Record<EntryKind, number>;
   entries: ProjectEntry[];
+}
+
+/**
+ * Fills in a manifest read from disk.
+ *
+ * `targetVersion` replaced a `targetVersions` array that nothing ever read or wrote past
+ * creation. Projects written before the change carry the array, so its first entry is
+ * adopted rather than discarded: it was the version the author picked when they created
+ * the project, which is exactly what the field now means.
+ */
+export function withDefaults(project: EllaProject): EllaProject {
+  if (typeof project.targetVersion === 'string' || project.targetVersion === null) {
+    return project;
+  }
+
+  const legacy = (project as { targetVersions?: unknown }).targetVersions;
+  const adopted = Array.isArray(legacy) && typeof legacy[0] === 'string' ? legacy[0] : null;
+
+  return { ...project, targetVersion: adopted };
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +95,7 @@ export function emptyProject(name: string, namespace: string): EllaProject {
     formatVersion: PROJECT_FORMAT_VERSION,
     name,
     namespace,
-    targetVersions: [],
+    targetVersion: null,
     slotPool: { block: 128, item: 128 },
     entries: [],
   };

@@ -15,17 +15,26 @@ import net.minecraftforge.fml.common.event.FMLServerStoppingEvent;
  * render layers, live reloads — is a client concern. Marking it so keeps it from being
  * demanded of servers.
  */
+/*
+ * `acceptedMinecraftVersions` must match this adapter's entry in ADAPTERS
+ * (launcher/src/shared/version.ts), and a launcher test fails if the two drift.
+ *
+ * Stating it matters even when the range looks obvious: with the attribute absent FML
+ * derives the range from `mcversion` in mcmod.info and accepts only that exact version,
+ * so the launcher's offer of 1.12 and 1.12.1 would have been refused by the loader.
+ */
 @Mod(
     modid = EllaMod.MOD_ID,
     name = "Ella",
     version = EllaMod.VERSION,
     clientSideOnly = true,
+    acceptedMinecraftVersions = "[1.12,1.13)",
     acceptableRemoteVersions = "*"
 )
 public final class EllaMod {
 
     public static final String MOD_ID = "ella";
-    public static final String VERSION = "0.1.0";
+    public static final String VERSION = "0.2.0";
 
     /** Default pool size, overridable with {@code -Della.slots.block} / {@code .item}. */
     private static final int DEFAULT_SLOTS = 128;

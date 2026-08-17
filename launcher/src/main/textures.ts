@@ -13,7 +13,7 @@
  * touched the model.
  */
 
-import { readFile, writeFile, rm } from 'node:fs/promises';
+import { readFile, writeFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { EllaProject, ProjectEntry } from '../shared/project.ts';
 import { placeholderTexturePng } from './pack.ts';
@@ -212,13 +212,24 @@ export async function addTexture(
  * not. Faces still pointing at the removed variable are reported so the caller can warn
  * rather than silently producing a model that will not load.
  */
+export interface RemovedTexture {
+  key: string;
+  reference: string;
+  /** True when removing it also cleared the model's `particle` entry. */
+  wasParticle: boolean;
+}
+
 export async function removeTexture(
   root: string,
   project: EllaProject,
   entry: ProjectEntry,
   key: string,
   options: { deleteFile?: boolean } = {},
-): Promise<{ textures: TextureVariable[]; orphanedFaces: string[] }> {
+): Promise<{
+  textures: TextureVariable[];
+  orphanedFaces: string[];
+  removed: RemovedTexture;
+}> {
   const model = await readModel(root, entry);
   const textures = model.textures ?? {};
 
@@ -232,9 +243,8 @@ export async function removeTexture(
   delete textures[key];
 
   // A particle entry pointing at the removed file would outlive it.
-  if (key !== PARTICLE_KEY && textures[PARTICLE_KEY] === reference) {
-    delete textures[PARTICLE_KEY];
-  }
+  const wasParticle = key !== PARTICLE_KEY && textures[PARTICLE_KEY] === reference;
+  if (wasParticle) delete textures[PARTICLE_KEY];
 
   model.textures = textures;
   await writeModel(root, entry, model);
@@ -248,8 +258,46 @@ export async function removeTexture(
     }
   }
 
-  return { textures: await listTextures(root, project, entry), orphanedFaces };
+  return {
+    textures: await listTextures(root, project, entry),
+    orphanedFaces,
+    removed: { key, reference, wasParticle },
+  };
 }
+
+/**
+ * Puts a removed texture variable back, particle entry included.
+ *
+ * Only the model JSON is rewritten, which is the whole of what {@link removeTexture} does
+ * when the image is kept — and the editor never deletes it. A variable whose file really
+ * was deleted is not restorable here, and is reported as such rather than restored as a
+ * reference to nothing, which is the one shape that stops a model loading at all.
+ */
+export async function restoreTexture(
+  root: string,
+  project: EllaProject,
+  entry: ProjectEntry,
+  removed: RemovedTexture,
+): Promise<TextureVariable[]> {
+  const relativePath = resolveReference(project, removed.reference);
+  if (relativePath && !(await fileExists(path.join(root, ...relativePath.split('/'))))) {
+    throw new ProjectError(
+      'TEXTURE_FILE_GONE',
+      `The image "${removed.reference}" points at was deleted, so the variable cannot be restored`,
+    );
+  }
+
+  const model = await readModel(root, entry);
+  model.textures ??= {};
+  model.textures[removed.key] = removed.reference;
+  if (removed.wasParticle) model.textures[PARTICLE_KEY] = removed.reference;
+
+  await writeModel(root, entry, model);
+  return listTextures(root, project, entry);
+}
+
+const fileExists = (target: string): Promise<boolean> =>
+  stat(target).then((entry) => entry.isFile(), () => false);
 
 /** Points the `particle` variable at the same file as `key`, or clears it. */
 export async function setParticleTexture(

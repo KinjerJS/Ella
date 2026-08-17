@@ -1,6 +1,6 @@
 {
   "name": "ella-launcher",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Ella — a model-testing workbench for Blockbench authors",
   "main": "./out/main/index.js",
   "author": "Ella",

@@ -1,6 +1,6 @@
 # Building Ella
 
-Three independent builds. Nothing is shared through a repository — the adapters compile
+Four independent builds. Nothing is shared through a repository — the adapters compile
 `ella-core` from source — so they can be built in any order.
 
 ## Launcher
@@ -8,7 +8,7 @@ Three independent builds. Nothing is shared through a repository — the adapter
 ```bash
 cd launcher
 npm install
-npm test          # 202 tests, runs straight off the TypeScript sources
+npm test          # 232 tests, runs straight off the TypeScript sources
 npm run typecheck
 npm run dev       # Electron with hot reload
 npm run build     # production bundle into out/
@@ -38,7 +38,11 @@ instance's `mods` folder.
 
 ```bash
 cd mod/adapters/forge-1.12.2 && gradle build
-cd mod/adapters/forge-modern && gradle build
+cd mod/adapters/forge-modern  && gradle build
+
+# The 1.8.9 adapter carries its own wrapper and needs a Java 8 JVM to run Gradle itself.
+cd mod/adapters/forge-1.8.9
+JAVA_HOME=/path/to/jdk-8 ./gradlew build      # or ./gradlew build -Dorg.gradle.java.home=...
 ```
 
 Output lands in `build/libs/`. The launcher finds it automatically in development; there
@@ -49,10 +53,24 @@ launcher explicitly filters it out for that reason.
 
 ### Toolchains
 
-| Adapter | Plugin | Gradle JVM | Compiles to |
-|---|---|---|---|
-| `forge-1.12.2` | RetroFuturaGradle 1.4.x | Java 17 | Java 8 |
-| `forge-modern` | ForgeGradle 6 | Java 21 | Java 21 |
+| Adapter | Plugin | Gradle | Gradle JVM | Compiles to |
+|---|---|---|---|---|
+| `forge-1.8.9` | ForgeGradle 2.1 | 2.14.1 (own wrapper) | Java 8 | Java 8 |
+| `forge-1.12.2` | RetroFuturaGradle 1.4.x | 8.2.1 | Java 17 | Java 8 |
+| `forge-modern` | ForgeGradle 6 | 8.2.1 | Java 21 | Java 21 |
+
+**Why 1.8.9 is the odd one out.** RetroFuturaGradle — which is what lets 1.12.2 build on a
+modern Gradle — supports exactly two Minecraft versions, 1.7.10 and 1.12.2, because those
+are the ones its authors ship modpacks for. No release of it adds 1.8.9, so that adapter
+has to use the era-correct ForgeGradle 2.1, which is pinned to Gradle 2.x and Java 8. It
+therefore has its own wrapper: `./gradlew` in that directory launches Gradle 2.14.1, not
+the 8.2.1 everything else uses. Adapters were always independent builds for exactly this
+kind of reason.
+
+Its `gradle.properties` raises the heap to 3 GB. Gradle 2.14's default is far too small for
+the 1.8.9 deobfuscation pass, which dies partway through `deobfMcMCP` with *GC overhead
+limit exceeded* — a confusing failure, because nothing in the message suggests memory is
+the fixable part.
 
 **Why RetroFuturaGradle for 1.12.2.** The original ForgeGradle 2.3 is pinned to Gradle 4.4
 and Java 8. RFG provides the same deobfuscation toolchain on modern Gradle. It is pinned
@@ -96,12 +114,12 @@ executable. Both are around 80 MB, which is Electron.
 **The adapters must be built first.** `stage:adapters` fails the build if it finds no jars
 at all, because an installer without them still launches Minecraft but silently loses live
 editing — the feature the tool exists for. Adapters that are merely *not written yet*
-(`forge-1.8.9`, `forge-mid`) are skipped without complaint, and the launcher reports those
+(`forge-mid`) are skipped without complaint, and the launcher reports those
 versions as vanilla-only at runtime.
 
 The jars are packaged as `extraResources`, so they sit next to the asar as ordinary files
 rather than inside it. The injector copies them into an instance's `mods` folder, and
-keeping their real filename (`ella-forge-1.12.2-0.1.0.jar`) matters: the stale-jar cleanup
+keeping their real filename (`ella-forge-1.12.2-0.2.0.jar`) matters: the stale-jar cleanup
 matches `ella-*.jar`, so renaming them would let two Ella mods accumulate in one instance.
 
 ### Signing
@@ -145,7 +163,7 @@ JDKs `setup-java` installed and reports the Java 8 toolchain as missing.
 Cutting a release is one command:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 ## Verifying an API before using it

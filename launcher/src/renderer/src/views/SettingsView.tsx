@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.tsx';
+import { Icon } from '../components/Icon.tsx';
+import { useToast } from '../components/Toast.tsx';
 import { LOCALES, LOCALE_NAMES, type Locale } from '../../../shared/i18n.ts';
 import type { AppConfigDto, JavaRuntimeDto } from '../../../shared/ipc.ts';
 
@@ -9,10 +11,10 @@ import type { AppConfigDto, JavaRuntimeDto } from '../../../shared/ipc.ts';
  */
 function BlockbenchPlugin() {
   const { t } = useI18n();
+  const toast = useToast();
   const [status, setStatus] = useState<
     { installed: boolean; outdated: boolean; installedPath: string } | null
   >(null);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const refresh = (): void => {
@@ -24,45 +26,52 @@ function BlockbenchPlugin() {
   const install = async (): Promise<void> => {
     setBusy(true);
     const result = await window.ella.blockbench.installPlugin();
-    if (!result.ok) setError(result.message);
-    else setError(null);
     setBusy(false);
+    if (result.ok) toast.ok(t('plugin.installedDone'));
+    else toast.error(result.message);
     refresh();
   };
 
   return (
-    <>
-      <h2>{t('plugin.title')}</h2>
-      {error && <div className="warning error">{error}</div>}
-      <div className="card">
-        <div className="row">
-          <div>
-            <div className="name">{t('plugin.liveSync')}</div>
-            <div className="help">{t('plugin.liveSyncHelp')}</div>
-          </div>
-          <span className="spacer" />
-          {status?.installed && !status.outdated && (
-            <span className="badge ok">{t('plugin.installed')}</span>
-          )}
-          {status?.outdated && <span className="badge warn">{t('plugin.outdated')}</span>}
-          <button onClick={() => void install()} disabled={busy}>
-            {status?.installed ? t('plugin.reinstall') : t('plugin.install')}
-          </button>
+    <div className="card">
+      <div className="row">
+        <div>
+          <div className="name">{t('plugin.liveSync')}</div>
+          <div className="help">{t('plugin.liveSyncHelp')}</div>
         </div>
-        {status?.installed && <div className="help">{status.installedPath}</div>}
+        <span className="spacer" />
+        {status?.installed && !status.outdated && (
+          <span className="badge ok">{t('plugin.installed')}</span>
+        )}
+        {status?.outdated && <span className="badge warn">{t('plugin.outdated')}</span>}
+        <button onClick={() => void install()} disabled={busy}>
+          {status?.installed ? t('plugin.reinstall') : t('plugin.install')}
+        </button>
       </div>
-    </>
+      {status?.installed && <div className="help">{status.installedPath}</div>}
+    </div>
   );
 }
 
-export function SettingsView() {
+interface Props {
+  /** A Blockbench path change moves a setup step from undone to done. */
+  onChanged: () => void;
+}
+
+export function SettingsView({ onChanged }: Props) {
   const { t, locale, setLocale } = useI18n();
   const [config, setConfig] = useState<AppConfigDto | null>(null);
   const [runtimes, setRuntimes] = useState<JavaRuntimeDto[]>([]);
+  const [detected, setDetected] = useState<string | null>(null);
+
+  const refreshDetected = (): void => {
+    void window.ella.blockbench.resolve().then(setDetected);
+  };
 
   useEffect(() => {
     void window.ella.config.get().then(setConfig);
     void window.ella.java.list().then(setRuntimes);
+    refreshDetected();
   }, []);
 
   if (!config) return null;
@@ -72,51 +81,88 @@ export function SettingsView() {
     void window.ella.config.set(patch);
   };
 
+  const updateBlockbench = (path: string | null): void => {
+    update({ blockbenchPath: path });
+    // Resolution also falls back to the well-known install locations, so the answer to
+    // "will opening a model work" is the main process's, not this input's.
+    setTimeout(() => {
+      refreshDetected();
+      onChanged();
+    }, 0);
+  };
+
   const browseBlockbench = async (): Promise<void> => {
     const chosen = await window.ella.dialog.openFile([
       { name: 'Blockbench', extensions: ['exe', 'app', ''] },
     ]);
-    if (chosen) update({ blockbenchPath: chosen });
+    if (chosen) updateBlockbench(chosen);
   };
 
   return (
-    <div>
-      <h1>{t('settings.title')}</h1>
-
-      <div className="field" style={{ maxWidth: 260 }}>
-        <label>{t('settings.language')}</label>
-        <select value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>
-          {LOCALES.map((code) => (
-            <option key={code} value={code}>
-              {LOCALE_NAMES[code]}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="field" style={{ maxWidth: 260 }}>
-        <label>{t('entry.displayName')}</label>
-        <input
-          value={config.username}
-          onChange={(event) => update({ username: event.target.value })}
-        />
-      </div>
-
-      <div className="field">
-        <label>{t('settings.blockbenchPath')}</label>
-        <div className="row">
-          <input
-            value={config.blockbenchPath ?? ''}
-            placeholder={t('blockbench.notFoundHelp')}
-            onChange={(event) => update({ blockbenchPath: event.target.value || null })}
-          />
-          <button onClick={() => void browseBlockbench()}>{t('common.browse')}</button>
-        </div>
+    <div className="view">
+      <div className="page-head">
+        <h1>{t('settings.title')}</h1>
+        <p className="subtitle">{t('settings.subtitle')}</p>
       </div>
 
       <div className="field-grid" style={{ maxWidth: 560 }}>
         <div className="field">
-          <label>{t('settings.slotPool')} · {t('entry.kind.block')}</label>
+          <label>{t('settings.language')}</label>
+          <select value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>
+            {LOCALES.map((code) => (
+              <option key={code} value={code}>
+                {LOCALE_NAMES[code]}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label>{t('settings.username')}</label>
+          <input
+            value={config.username}
+            onChange={(event) => update({ username: event.target.value })}
+          />
+          <div className="help">{t('settings.usernameHelp')}</div>
+        </div>
+      </div>
+
+      <h2>{t('settings.blockbench')}</h2>
+
+      <div className="field" style={{ maxWidth: 700 }}>
+        <label>{t('settings.blockbenchPath')}</label>
+        <div className="row">
+          <input
+            value={config.blockbenchPath ?? ''}
+            placeholder={t('settings.blockbenchPlaceholder')}
+            onChange={(event) => updateBlockbench(event.target.value || null)}
+          />
+          <button onClick={() => void browseBlockbench()}>
+            <Icon name="folder" />
+            {t('common.browse')}
+          </button>
+        </div>
+        {/* Whether Ella can find Blockbench is not the same question as whether this box
+            is filled in, and only the first one decides if opening a model works. */}
+        {detected ? (
+          <div className="help" style={{ color: 'var(--ok)' }}>
+            {config.blockbenchPath
+              ? t('settings.blockbenchOk')
+              : t('settings.blockbenchDetected', { path: detected })}
+          </div>
+        ) : (
+          <div className="help" style={{ color: 'var(--warn)' }}>
+            {t('settings.blockbenchMissing')}
+          </div>
+        )}
+      </div>
+
+      <BlockbenchPlugin />
+
+      <h2>{t('settings.slotPool')}</h2>
+      <div className="field-grid" style={{ maxWidth: 560 }}>
+        <div className="field">
+          <label>{t('entry.kind.block')}</label>
           <input
             type="number"
             min={16}
@@ -128,7 +174,7 @@ export function SettingsView() {
           />
         </div>
         <div className="field">
-          <label>{t('settings.slotPool')} · {t('entry.kind.item')}</label>
+          <label>{t('entry.kind.item')}</label>
           <input
             type="number"
             min={16}
@@ -140,23 +186,29 @@ export function SettingsView() {
           />
         </div>
       </div>
-      <div className="help" style={{ marginTop: -6, marginBottom: 14 }}>
+      <div className="help" style={{ marginTop: -8, marginBottom: 14 }}>
         {t('settings.slotPoolHelp')}
       </div>
 
-      <BlockbenchPlugin />
-
       <h2>Java</h2>
-      <div className="list">
-        {runtimes.map((runtime) => (
-          <div key={runtime.path} className="list-row" style={{ cursor: 'default' }}>
-            <span className="badge">Java {runtime.major}</span>
-            <span className="name">{runtime.version}</span>
-            <span className="spacer" />
-            <span className="meta">{runtime.path}</span>
-          </div>
-        ))}
-      </div>
+      <p className="section-note">{t('settings.javaHelp')}</p>
+      {runtimes.length === 0 ? (
+        <div className="warning">
+          <Icon name="alert" size={16} />
+          <div>{t('settings.javaNone')}</div>
+        </div>
+      ) : (
+        <div className="list">
+          {runtimes.map((runtime) => (
+            <div key={runtime.path} className="list-row" style={{ cursor: 'default' }}>
+              <span className="badge accent">Java {runtime.major}</span>
+              <span className="name">{runtime.version}</span>
+              <span className="spacer" />
+              <span className="meta">{runtime.path}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

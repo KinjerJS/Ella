@@ -1,0 +1,15 @@
+[
+  {
+    "modid": "ella",
+    "name": "Ella",
+    "description": "Live Blockbench model testing. Binds project entries to a pool of placeholder blocks and items so models can be edited without restarting the game.",
+    "version": "${version}",
+    "mcversion": "${mcversion}",
+    "url": "",
+    "authorList": [],
+    "credits": "",
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": []
+  }
+]

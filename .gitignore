@@ -12,13 +12,20 @@ release/
 launcher/build/
 launcher/resources/
 
+# tsc's incremental cache. It changes on every typecheck and describes one machine's last
+# build, so committing it makes every branch conflict over a file nobody reads.
+*.tsbuildinfo
+
 # Java / Gradle
 build/
 .gradle/
 bin/
 *.class
 *.jar
-!gradle/wrapper/gradle-wrapper.jar
+# Anchored with `**/` so it reaches an adapter's own wrapper, not just a root one. The
+# 1.8.9 adapter is the only build here that needs a wrapper — without its jar committed, a
+# fresh clone and CI both fail at `./gradlew`.
+!**/gradle/wrapper/gradle-wrapper.jar
 
 # Forge / Minecraft dev
 run/

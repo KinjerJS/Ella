@@ -1,0 +1,78 @@
+/*
+ * Ella adapter for Minecraft 1.8.9 on Forge.
+ *
+ * Unlike the other two adapters, this one runs on the era-correct toolchain rather than a
+ * modern one. RetroFuturaGradle — which lets 1.12.2 build on Gradle 8 — supports exactly
+ * two Minecraft versions, 1.7.10 and 1.12.2, because those are the ones its authors ship
+ * modpacks for. 1.8.9 is not one of them and no version of RFG adds it, so the only route
+ * is ForgeGradle 2.1, which is pinned to Gradle 2.x and Java 8.
+ *
+ * That is why this directory carries its own wrapper: `./gradlew` here launches Gradle
+ * 2.14.1, not the 8.2.1 the rest of the repository uses. The adapters were always
+ * independent builds for exactly this reason.
+ */
+
+buildscript {
+    repositories {
+        maven { url = 'https://maven.minecraftforge.net' }
+        maven { url = 'https://repo.maven.apache.org/maven2' }
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'net.minecraftforge.gradle:ForgeGradle:2.1-SNAPSHOT'
+    }
+}
+
+apply plugin: 'net.minecraftforge.gradle.forge'
+
+group = 'dev.ella'
+version = '0.2.0'
+archivesBaseName = 'ella-forge-1.8.9'
+
+sourceCompatibility = '1.8'
+targetCompatibility = '1.8'
+
+minecraft {
+    version = '1.8.9-11.15.1.2318-1.8.9'
+    runDir = 'run'
+    // MCP mappings for 1.8.9: `stable_22` is the last stable channel published for it.
+    mappings = 'stable_22'
+}
+
+/*
+ * ella-core is compiled from source rather than consumed as a jar, so an adapter can
+ * never be built against a stale copy of the shared code.
+ */
+sourceSets {
+    main {
+        java {
+            srcDir file('../../ella-core/src/main/java')
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Gson comes from Minecraft at runtime; compiling against it must not bundle a copy.
+    compileOnly 'com.google.code.gson:gson:2.8.0'
+}
+
+processResources {
+    inputs.property 'version', project.version
+
+    filesMatching('mcmod.info') {
+        expand 'version': project.version, 'mcversion': '1.8.9'
+    }
+}
+
+jar {
+    manifest {
+        attributes(
+            'FMLCorePluginContainsFMLMod': 'true',
+            'Implementation-Version': project.version
+        )
+    }
+}

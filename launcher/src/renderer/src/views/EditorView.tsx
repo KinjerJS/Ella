@@ -1,31 +1,50 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon.tsx';
+import { EmptyState } from '../components/EmptyState.tsx';
+import { ErrorBanner } from '../components/ErrorBanner.tsx';
+import { useToast } from '../components/Toast.tsx';
 import { useI18n } from '../i18n.tsx';
 import { SettingsForm } from '../components/SettingsForm.tsx';
 import { TexturePanel } from '../components/TexturePanel.tsx';
 import { QuickNewEntry } from '../components/QuickNewEntry.tsx';
 import { EntryHeader } from '../components/EntryHeader.tsx';
 import { usePreviews } from '../previews.ts';
+import { findParentTrap } from '../../../shared/model-compat.ts';
+import type { Facts } from '../facts.ts';
 import type { SessionHook } from '../session.ts';
+import type { View } from '../navigation.ts';
 
 interface Props {
   session: SessionHook;
+  facts: Facts;
   selectedId: string | null;
   /** Null clears the selection, letting the view fall back to the first entry. */
   onSelect: (id: string | null) => void;
+  onNavigate: (view: View) => void;
 }
 
-export function EditorView({ session, selectedId, onSelect }: Props) {
+export function EditorView({ session, facts, selectedId, onSelect, onNavigate }: Props) {
   const { t, locale } = useI18n();
+  const toast = useToast();
   const { project, state } = session;
   const [error, setError] = useState<string | null>(null);
   const [ignored, setIgnored] = useState<string[]>([]);
   const [deleting, setDeleting] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [fixingParent, setFixingParent] = useState(false);
   const previews = usePreviews(Boolean(project));
 
   // Any change of selection cancels a pending delete, so a confirmation can never end up
   // aimed at an entry other than the one it was opened for.
-  useEffect(() => setDeleting(false), [selectedId]);
+  //
+  // The error goes with it, for the same reason: it named a failure on the entry being
+  // left, and reading it above a different one is worse than not seeing it at all. The
+  // capability list too — it describes what the last patched entry's settings did.
+  useEffect(() => {
+    setDeleting(false);
+    setError(null);
+    setIgnored([]);
+  }, [selectedId]);
 
   const entry = useMemo(
     () => project?.entries.find((candidate) => candidate.id === selectedId) ?? null,
@@ -48,13 +67,30 @@ export function EditorView({ session, selectedId, onSelect }: Props) {
 
   // Only the absence of a project is a dead end. An empty project still renders the
   // sidebar, because that is where the button to fill it lives.
-  if (!project) return <div className="empty">{t('project.noProject')}</div>;
+  if (!project) {
+    return (
+      <div className="view">
+        <EmptyState
+          icon="folder"
+          title={t('project.noProject')}
+          text={t('project.noProjectHelp')}
+          action={{
+            label: t('project.new'),
+            icon: 'plus',
+            onClick: () => onNavigate('project'),
+          }}
+        />
+      </div>
+    );
+  }
 
   const connected = state.status === 'connected';
 
-  const patch = async (settings: Record<string, unknown>): Promise<void> => {
-    if (!entry) return;
-    const result = await window.ella.entries.patchLive(entry.id, settings);
+  // Takes the id from the form rather than from the current selection: a patch can still
+  // be in flight when the user moves to another entry, and it must land on the one it was
+  // made for.
+  const patch = async (id: string, settings: Record<string, unknown>): Promise<void> => {
+    const result = await window.ella.entries.patchLive(id, settings);
     if (!result.ok) {
       setError(result.message);
       return;
@@ -63,46 +99,129 @@ export function EditorView({ session, selectedId, onSelect }: Props) {
     setIgnored(result.value?.ignored ?? []);
   };
 
-  const act = async (action: () => Promise<{ ok: boolean; message?: string }>): Promise<void> => {
-    const result = await action();
-    setError(result.ok ? null : (result.message ?? null));
+  // Read off the preview, which already carries the parsed model and is refreshed on every
+  // Blockbench save — so the warning appears and clears as the file changes.
+  const parentTrap = findParentTrap(
+    previews.find((candidate) => candidate.id === entry?.id)?.model,
+  );
+
+  const fixParent = async (id: string): Promise<void> => {
+    setFixingParent(true);
+    const result = await window.ella.entries.removeModelParent(id);
+    setFixingParent(false);
+
+    // Success announces itself as an undoable change; only the failure needs saying here.
+    if (!result.ok) toast.error(result.message);
   };
 
-  return (
-    <div className="split">
-      <div>
-        <h2 style={{ marginTop: 0 }}>{t('project.entries')}</h2>
-        <QuickNewEntry onCreated={onSelect} onError={setError} />
+  const act = async (
+    action: () => Promise<{ ok: boolean; message?: string }>,
+    success?: string,
+  ): Promise<void> => {
+    const result = await action();
+    if (result.ok) {
+      setError(null);
+      if (success) toast.ok(success);
+    } else {
+      toast.error(result.message ?? t('common.error'));
+    }
+  };
 
-        {project.entries.length === 0 && (
-          <div className="help">{t('project.noEntries')}</div>
+  /*
+   * Why each action is unavailable, said on the control itself.
+   *
+   * These three buttons are dark most of the time — before a launch, before the mod
+   * connects, on a version whose adapter cannot place blocks — and each has a different
+   * cause with a different fix. Without the reason they read as broken.
+   */
+  const blockbenchBlocked = facts.blockbenchFound ? null : t('blockbench.notFoundHelp');
+  const gameBlocked = !connected
+    ? t('entry.needsGame')
+    : entry && entry.slot === null
+      ? t('entry.needsSlot')
+      : null;
+  const placeBlocked =
+    gameBlocked ??
+    (session.hasCapability('entry.place')
+      ? null
+      : t('capability.unavailable', { version: state.game?.minecraftVersion ?? '?' }));
+
+  return (
+    <div className="view split">
+      <div>
+        {/* Heading and its one action on the same line, as in the project view. The list
+            then starts directly underneath instead of behind a pair of buttons the eye
+            has to sort out from the entries. */}
+        <div className="row" style={{ marginBottom: 10 }}>
+          <h2 style={{ margin: 0 }}>{t('project.entries')}</h2>
+          <span className="spacer" />
+          {!adding && (
+            <button className="subtle" onClick={() => setAdding(true)}>
+              <Icon name="plus" size={14} />
+              {t('entry.new')}
+            </button>
+          )}
+        </div>
+
+        {adding && (
+          <QuickNewEntry
+            namespace={project.namespace}
+            onCreated={(id) => {
+              setAdding(false);
+              onSelect(id);
+            }}
+            onCancel={() => setAdding(false)}
+            onError={setError}
+          />
         )}
 
-        <div className="list scroll-list">
-          {project.entries.map((candidate) => (
-            <div
-              key={candidate.id}
-              className={`list-row${candidate.id === selectedId ? ' selected' : ''}`}
-              onClick={() => onSelect(candidate.id)}
-            >
-              <span className="badge">{t(`entry.kind.${candidate.kind}`)}</span>
-              <span className="name">
-                {candidate.displayName[locale] ?? candidate.displayName.en}
-              </span>
-            </div>
-          ))}
-        </div>
+        {project.entries.length === 0 ? (
+          <div className="help" style={{ marginTop: 10 }}>
+            {t('project.noEntriesHelp')}
+          </div>
+        ) : (
+          <div className="list scroll-list">
+            {project.entries.map((candidate) => (
+              <div
+                key={candidate.id}
+                className={`list-row${candidate.id === selectedId ? ' selected' : ''}`}
+                onClick={() => onSelect(candidate.id)}
+              >
+                <Icon name={candidate.kind} size={15} />
+                <span className="name">
+                  {candidate.displayName[locale] ?? candidate.displayName.en}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {entry && (
         <div>
-          <h1>{entry.displayName[locale] ?? entry.displayName.en}</h1>
-          <p className="subtitle">
-            {entry.id} ·{' '}
-            {entry.slot === null ? t('entry.unbound') : `${t('entry.slot')} ${entry.slot}`}
-          </p>
+          <div className="page-head">
+            <h1>{entry.displayName[locale] ?? entry.displayName.en}</h1>
+            <p className="subtitle">
+              {project.namespace}:{entry.id} ·{' '}
+              {entry.slot === null ? t('entry.unbound') : `${t('entry.slot')} ${entry.slot}`}
+            </p>
+          </div>
 
-          {error && <div className="warning error">{error}</div>}
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+
+          {/* Blockbench missing blocks the only action on this page that matters, so it
+              gets a banner with the fix attached rather than a tooltip on a dark button. */}
+          {blockbenchBlocked && (
+            <div className="warning">
+              <Icon name="alert" size={16} />
+              <div>
+                {t('blockbench.notFound')} —{' '}
+                <button className="link" onClick={() => onNavigate('settings')}>
+                  {t('blockbench.setPath')}
+                </button>
+              </div>
+            </div>
+          )}
 
           <EntryHeader
             entry={entry}
@@ -112,39 +231,81 @@ export function EditorView({ session, selectedId, onSelect }: Props) {
             onRenamed={onSelect}
           />
 
+          {/* A parent silently overrides the model's own geometry on 1.8.x, so the author
+              sees a plain cube and reasonably concludes Ella lost their work. Shown
+              whatever version is connected: the file is wrong for 1.8 either way, and
+              finding out at launch is the failure worth avoiding. */}
+          {parentTrap && (
+            <div className="warning">
+              <Icon name="alert" size={16} />
+              <div>
+                {t('model.parentTrap', {
+                  parent: parentTrap.parent,
+                  count: parentTrap.elementCount,
+                })}{' '}
+                <button
+                  className="link"
+                  disabled={fixingParent}
+                  onClick={() => void fixParent(entry.id)}
+                >
+                  {t('warning.fix')}
+                </button>
+              </div>
+            </div>
+          )}
+
           {ignored.length > 0 && (
             <div className="warning">
-              {t('capability.unavailable', {
-                version: state.game?.minecraftVersion ?? '?',
-              })}
-              {`: ${ignored.join(', ')}`}
+              <Icon name="alert" size={16} />
+              <div>
+                {t('capability.unavailable', {
+                  version: state.game?.minecraftVersion ?? '?',
+                })}
+                {`: ${ignored.join(', ')}`}
+              </div>
             </div>
           )}
 
           {/* Actions are grouped by where they act: the first three reach outside Ella
               (Blockbench, the running game), the last changes the project itself. */}
-          <div className="row" style={{ marginBottom: 18 }}>
+          <div className="row" style={{ marginBottom: 20 }}>
             <button
               className="primary"
-              onClick={() => void act(() => window.ella.entries.openInBlockbench(entry.id))}
+              disabled={blockbenchBlocked !== null}
+              title={blockbenchBlocked ?? undefined}
+              onClick={() =>
+                void act(() => window.ella.entries.openInBlockbench(entry.id))
+              }
             >
-              <Icon name="external" />{t('entry.openInBlockbench')}
+              <Icon name="brush" />
+              {t('entry.openInBlockbench')}
             </button>
             <button
-              disabled={!connected || entry.slot === null}
-              onClick={() => void act(() => window.ella.entries.give(entry.id))}
+              disabled={gameBlocked !== null}
+              title={gameBlocked ?? undefined}
+              onClick={() =>
+                void act(() => window.ella.entries.give(entry.id), t('entry.giveDone'))
+              }
             >
               {t('entry.give')}
             </button>
             <button
-              disabled={!connected || entry.slot === null || !session.hasCapability('entry.place')}
-              onClick={() => void act(() => window.ella.entries.place(entry.id))}
+              disabled={placeBlocked !== null}
+              title={placeBlocked ?? undefined}
+              onClick={() =>
+                void act(() => window.ella.entries.place(entry.id), t('entry.placeDone'))
+              }
             >
               {t('entry.place')}
             </button>
             <span className="spacer" />
-            <button className="danger" onClick={() => setDeleting(true)}>
-              <Icon name="trash" />{t('entry.delete')}
+            <button
+              className="danger icon-only"
+              onClick={() => setDeleting(true)}
+              title={t('entry.delete')}
+              aria-label={t('entry.delete')}
+            >
+              <Icon name="trash" />
             </button>
           </div>
 
@@ -155,6 +316,7 @@ export function EditorView({ session, selectedId, onSelect }: Props) {
               onDone={() => {
                 setDeleting(false);
                 setError(null);
+                // No toast here: the deletion announces itself, with the way back attached.
                 // The selection now points at something gone; hand it back so the
                 // auto-select effect picks the next entry.
                 onSelect(null);
@@ -167,11 +329,12 @@ export function EditorView({ session, selectedId, onSelect }: Props) {
           <TexturePanel entryId={entry.id} onError={setError} />
 
           <SettingsForm
+            entryId={entry.id}
             kind={entry.kind}
             settings={entry.settings}
             capabilities={state.capabilities}
             minecraftVersion={state.game?.minecraftVersion ?? null}
-            onChange={(next) => void patch(next)}
+            onChange={patch}
           />
         </div>
       )}
@@ -224,7 +387,8 @@ function DeleteEntry({ entryId, onCancel, onDone, onError }: DeleteEntryProps) {
 
       {deleteFiles && (
         <div className="warning error" style={{ marginTop: 10 }}>
-          {t('entry.deleteFilesWarning')}
+          <Icon name="alert" size={16} />
+          <div>{t('entry.deleteFilesWarning')}</div>
         </div>
       )}
 
@@ -239,4 +403,3 @@ function DeleteEntry({ entryId, onCancel, onDone, onError }: DeleteEntryProps) {
     </div>
   );
 }
-

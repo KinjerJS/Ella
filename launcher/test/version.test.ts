@@ -87,13 +87,25 @@ test('picks the Java runtime each version actually needs', () => {
 });
 
 test('routes a version only to an adapter that is actually built', () => {
+  assert.equal(adapterFor('1.8.9'), 'forge-1.8.9');
   assert.equal(adapterFor('1.12.2'), 'forge-1.12.2');
   assert.equal(adapterFor('1.21.1'), 'forge-modern');
 
   // Designed-for but unbuilt buckets must not be offered as working.
-  assert.equal(adapterFor('1.8.9'), null);
   assert.equal(adapterFor('1.16.5'), null);
   assert.equal(adapterFor('1.20.1'), null);
+});
+
+test('the 1.8 adapter claims only the two versions its mappings cover', () => {
+  // 1.8.8 and 1.8.9 share every obfuscated name the adapter overrides, so one jar serves
+  // both. 1.8 through 1.8.7 do not, and offering the jar there would bind the overrides
+  // to whatever those names happen to mean instead — a mod that loads and misbehaves,
+  // which is worse than one that is simply unavailable.
+  assert.equal(adapterFor('1.8.8'), 'forge-1.8.9');
+  assert.equal(adapterFor('1.8.9'), 'forge-1.8.9');
+  assert.equal(adapterFor('1.8'), null);
+  assert.equal(adapterFor('1.8.7'), null);
+  assert.equal(adapterFor('1.9'), null);
 });
 
 test('a planned bucket is still reported as covering its range', () => {

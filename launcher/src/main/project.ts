@@ -9,6 +9,7 @@ import {
   PROJECT_FORMAT_VERSION,
   PROJECT_MANIFEST,
   emptyProject,
+  withDefaults,
   isValidIdentifier,
   nextFreeSlot,
   defaultModelOutput,
@@ -19,12 +20,15 @@ import {
 } from '../shared/project.ts';
 import type { EntryKind, LocaleMap } from '../shared/protocol.ts';
 import { defaultsFor } from '../shared/settings-schema.ts';
+import { findParentTrap, withoutParent } from '../shared/model-compat.ts';
 import { projectsDir, projectDir, ensureDir } from './paths.ts';
+import { stashFiles, restoreStash } from './trash.ts';
 import {
   defaultBlockModel,
   defaultItemModel,
   placeholderTexturePng,
   writeSlotNamespace,
+  writeEntrySlot,
   HIGHEST_KNOWN_PACK_FORMAT,
 } from './pack.ts';
 
@@ -61,7 +65,7 @@ export async function loadProject(root: string): Promise<EllaProject> {
     );
   }
 
-  return project;
+  return withDefaults(project);
 }
 
 /** Writes the manifest atomically. */
@@ -77,6 +81,8 @@ export interface ProjectSummary {
   namespace: string;
   root: string;
   entryCount: number;
+  /** The version it is authored against, so the list can say so before it is opened. */
+  targetVersion: string | null;
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
@@ -94,6 +100,7 @@ export async function listProjects(): Promise<ProjectSummary[]> {
         namespace: project.namespace,
         root,
         entryCount: project.entries.length,
+        targetVersion: project.targetVersion,
       });
     } catch {
       // A directory that is not a project is simply not listed.
@@ -105,7 +112,7 @@ export async function listProjects(): Promise<ProjectSummary[]> {
 export async function createProject(
   name: string,
   namespace: string,
-  targetVersions: string[] = [],
+  targetVersion: string | null = null,
 ): Promise<{ project: EllaProject; root: string }> {
   if (!isValidIdentifier(namespace)) {
     throw new ProjectError(
@@ -119,7 +126,7 @@ export async function createProject(
     throw new ProjectError('PROJECT_EXISTS', `A project already exists at ${root}`);
   }
 
-  const project = { ...emptyProject(name, namespace), targetVersions };
+  const project = { ...emptyProject(name, namespace), targetVersion };
 
   await ensureDir(path.join(root, 'sources'));
   await ensureDir(path.join(root, 'pack', 'assets', namespace));
@@ -147,7 +154,7 @@ export async function createProject(
 export async function updateProjectInfo(
   root: string,
   project: EllaProject,
-  changes: { name?: string; namespace?: string; targetVersions?: string[] },
+  changes: { name?: string; namespace?: string; targetVersion?: string | null },
 ): Promise<EllaProject> {
   const name = changes.name?.trim() ?? project.name;
   const namespace = changes.namespace?.trim() ?? project.namespace;
@@ -194,8 +201,16 @@ export async function updateProjectInfo(
     await rewriteNamespaceReferences(root, namespace, project.namespace, entries);
   }
 
-  const updated: EllaProject = { ...project, name, namespace, entries,
-    targetVersions: changes.targetVersions ?? project.targetVersions };
+  const updated: EllaProject = {
+    ...project,
+    name,
+    namespace,
+    entries,
+    // Undefined means "leave it alone"; null is a deliberate unbinding, so the two cannot
+    // collapse into a single `??`.
+    targetVersion:
+      changes.targetVersion === undefined ? project.targetVersion : changes.targetVersion,
+  };
 
   await saveProject(root, updated);
   return updated;
@@ -473,30 +488,84 @@ export async function renameEntry(
   return { project: updated, entry: renamed };
 }
 
+/** The stash a deleted entry's files wait in. See main/trash.ts. */
+export const entryStash = (id: string): string => `entry-${id}`;
+
+export interface DeletedEntry {
+  project: EllaProject;
+  entry: ProjectEntry;
+  /** Where it sat in the list, so restoring it does not send it to the bottom. */
+  index: number;
+}
+
 export async function deleteEntry(
   root: string,
   project: EllaProject,
   id: string,
   options: { deleteFiles?: boolean } = {},
-): Promise<EllaProject> {
-  const entry = project.entries.find((candidate) => candidate.id === id);
-  if (!entry) throw new ProjectError('UNKNOWN_ENTRY', `No entry named "${id}"`);
+): Promise<DeletedEntry> {
+  const index = project.entries.findIndex((candidate) => candidate.id === id);
+  if (index === -1) throw new ProjectError('UNKNOWN_ENTRY', `No entry named "${id}"`);
 
+  const entry = project.entries[index];
   const updated = {
     ...project,
     entries: project.entries.filter((candidate) => candidate.id !== id),
   };
 
   if (options.deleteFiles) {
-    // Textures and Blockbench sources are the author's work; only remove them when the
-    // caller explicitly asks, so a mis-click cannot destroy an afternoon of modelling.
-    for (const relative of [entry.model.output, entry.model.path]) {
-      await rm(path.join(root, ...relative.split('/')), { force: true });
-    }
+    // Textures and Blockbench sources are the author's work; only removed when the caller
+    // explicitly asks, and even then moved aside rather than destroyed, so the undo the
+    // editor offers afterwards has something to put back.
+    await stashFiles(root, entryStash(id), [
+      entry.model.output,
+      entry.model.path,
+      textureRelativePath(project, entry),
+    ]);
   }
 
   await saveProject(root, updated);
-  return updated;
+  return { project: updated, entry, index };
+}
+
+/**
+ * Puts a deleted entry back, files and all.
+ *
+ * The slot is not restored blindly: an entry created in the meantime may have taken it, and
+ * two entries on one slot is a live-editing bug that would outlast this session. A taken
+ * slot is exchanged for the next free one, and a full pool leaves the entry unbound —
+ * recoverable by restarting the game, unlike a corrupted binding.
+ */
+export async function restoreEntry(
+  root: string,
+  project: EllaProject,
+  entry: ProjectEntry,
+  index: number,
+): Promise<{ project: EllaProject; entry: ProjectEntry }> {
+  if (project.entries.some((candidate) => candidate.id === entry.id)) {
+    throw new ProjectError('DUPLICATE_ID', `An entry named "${entry.id}" already exists`);
+  }
+
+  const taken = new Set(
+    project.entries
+      .filter((candidate) => candidate.kind === entry.kind && candidate.slot !== null)
+      .map((candidate) => candidate.slot as number),
+  );
+
+  const slot =
+    entry.slot !== null && !taken.has(entry.slot) ? entry.slot : nextFreeSlot(project, entry.kind);
+
+  const restored: ProjectEntry = { ...entry, slot };
+  const entries = [...project.entries];
+  entries.splice(Math.min(index, entries.length), 0, restored);
+
+  // Files first: a manifest that lists an entry whose model is still in the trash would
+  // describe a project that does not exist.
+  await restoreStash(root, entryStash(entry.id));
+
+  const updated = { ...project, entries };
+  await saveProject(root, updated);
+  return { project: updated, entry: restored };
 }
 
 /** Rebuilds the slot namespace after any change that affects bindings or names. */
@@ -506,6 +575,19 @@ export async function syncPack(
   packFormat: number,
 ): Promise<void> {
   await writeSlotNamespace(root, project, packFormat);
+}
+
+/**
+ * Rewrites one entry's slot after a change that cannot affect any other slot.
+ *
+ * See {@link writeEntrySlot} for why a settings change qualifies.
+ */
+export async function syncEntryPack(
+  root: string,
+  project: EllaProject,
+  entry: ProjectEntry,
+): Promise<void> {
+  await writeEntrySlot(root, project, entry);
 }
 
 // ---------------------------------------------------------------------------
@@ -637,6 +719,52 @@ export async function readEntryPreviews(
       };
     }),
   );
+}
+
+/**
+ * Removes the `parent` from an entry's model, so its own geometry is what renders.
+ *
+ * See {@link findParentTrap} for why this is needed at all. The rewrite is deliberately
+ * minimal — one key removed, everything else untouched, two-space JSON like Blockbench
+ * writes — because this is the author's file and the next Blockbench save has to see
+ * something it recognises.
+ *
+ * @returns the parent that was removed and the file as it was, or null when there was
+ *          nothing to fix. The original is returned rather than kept aside because it is
+ *          what lets the editor offer to take the rewrite back.
+ */
+export async function removeModelParent(
+  root: string,
+  entry: ProjectEntry,
+): Promise<{ parent: string; original: string } | null> {
+  const file = path.join(root, ...entry.model.output.split('/'));
+
+  let original: string;
+  let model: Record<string, unknown>;
+  try {
+    original = await readFile(file, 'utf8');
+    model = JSON.parse(original) as Record<string, unknown>;
+  } catch (error) {
+    throw new ProjectError(
+      'BAD_MODEL',
+      `Could not read the model for "${entry.id}": ${(error as Error).message}`,
+    );
+  }
+
+  const trap = findParentTrap(model);
+  if (!trap) return null;
+
+  await writeFile(file, `${JSON.stringify(withoutParent(model), null, 2)}\n`, 'utf8');
+  return { parent: trap.parent, original };
+}
+
+/** Writes an entry's model file back verbatim. The inverse of a rewrite Ella made. */
+export async function writeModelFile(
+  root: string,
+  entry: ProjectEntry,
+  content: string,
+): Promise<void> {
+  await writeFile(path.join(root, ...entry.model.output.split('/')), content, 'utf8');
 }
 
 export async function writeProjectFile(

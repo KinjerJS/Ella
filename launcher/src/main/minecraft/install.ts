@@ -15,7 +15,7 @@ import {
   type ProgressCallback,
   type DownloadError,
 } from './download.ts';
-import { resolveLibraries } from './libraries.ts';
+import { resolveLibraries, type ResolvedLibrary } from './libraries.ts';
 import { resolveVersionJson } from './manifest.ts';
 import {
   assetIndexesDir,
@@ -49,29 +49,25 @@ export interface InstallOptions {
 const assetObjectPath = (hash: string): string =>
   path.join(assetObjectsDir(), hash.slice(0, 2), hash);
 
-export async function installVersion(
-  id: string,
-  options: InstallOptions = {},
-): Promise<InstallResult> {
-  const version = await resolveVersionJson(id);
+/**
+ * Turns resolved libraries into download tasks.
+ *
+ * A library entry comes in three shapes and the difference is not cosmetic. Modern files
+ * give a direct url with a checksum. Forge's give a repository base and expect the path
+ * to be derived from the Maven coordinate. The oldest give neither and assume the
+ * launcher knows Mojang's own repository — that last group is why 1.8.x needs this at
+ * all, since `asm-all` and `trove4j` are listed with no url whatsoever.
+ *
+ * Exported because the legacy Forge install needs exactly this. Those installers leave
+ * every library to the launcher, and a second copy of the three-shape logic would drift
+ * from this one.
+ */
+export async function libraryDownloadTasks(
+  libraries: ResolvedLibrary[],
+): Promise<DownloadTask[]> {
   const tasks: DownloadTask[] = [];
 
-  // --- client jar ---------------------------------------------------------
-  const client = version.downloads?.client;
-  if (client) {
-    tasks.push({
-      url: client.url,
-      destination: versionJar(version.id),
-      sha1: client.sha1,
-      size: client.size,
-      label: `${version.id}.jar`,
-    });
-  }
-
-  // --- libraries and natives ---------------------------------------------
-  const { classpath, natives } = resolveLibraries(version, librariesDir());
-
-  for (const library of [...classpath, ...natives]) {
+  for (const library of libraries) {
     if (library.download?.url) {
       tasks.push({
         url: library.download.url,
@@ -95,6 +91,32 @@ export async function installVersion(
       tasks.push({ url: MAVEN_CENTRAL + relative, destination: library.path, label: library.name });
     }
   }
+
+  return tasks;
+}
+
+export async function installVersion(
+  id: string,
+  options: InstallOptions = {},
+): Promise<InstallResult> {
+  const version = await resolveVersionJson(id);
+  const tasks: DownloadTask[] = [];
+
+  // --- client jar ---------------------------------------------------------
+  const client = version.downloads?.client;
+  if (client) {
+    tasks.push({
+      url: client.url,
+      destination: versionJar(version.id),
+      sha1: client.sha1,
+      size: client.size,
+      label: `${version.id}.jar`,
+    });
+  }
+
+  // --- libraries and natives ---------------------------------------------
+  const { classpath, natives } = resolveLibraries(version, librariesDir());
+  tasks.push(...(await libraryDownloadTasks([...classpath, ...natives])));
 
   // --- asset index and objects -------------------------------------------
   let assetIndex: AssetIndex | undefined;

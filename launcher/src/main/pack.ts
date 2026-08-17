@@ -140,8 +140,43 @@ export const blockItemModel = (slot: number): string =>
   JSON.stringify({ parent: `${SLOT_NAMESPACE}:block/${slotModelName(slot)}` }, null, 2);
 
 /** A cube-shaped starting model, so a new block is visible before any Blockbench work. */
+/**
+ * A cube-shaped starting model, so a new block is visible before any Blockbench work.
+ *
+ * Self-contained rather than `{ parent: "block/cube_all" }`, and that is not a style
+ * choice. Blockbench keeps whatever parent it finds, so a model that starts with one still
+ * has it after geometry is added — and on 1.8.x a parent overrides the child's own
+ * elements outright, which renders the author's work as a plain cube. Starting with no
+ * parent means there is none to inherit into that trap. See shared/model-compat.ts.
+ *
+ * The elements and texture variables are what `block/cube_all` resolves to anyway, so
+ * nothing is lost on the versions where inheriting would have worked.
+ */
 export const defaultBlockModel = (texture: string): string =>
-  JSON.stringify({ parent: 'block/cube_all', textures: { all: texture } }, null, 2);
+  JSON.stringify(
+    {
+      textures: {
+        all: texture,
+        particle: texture,
+      },
+      elements: [
+        {
+          from: [0, 0, 0],
+          to: [16, 16, 16],
+          faces: {
+            down: { uv: [0, 0, 16, 16], texture: '#all', cullface: 'down' },
+            up: { uv: [0, 0, 16, 16], texture: '#all', cullface: 'up' },
+            north: { uv: [0, 0, 16, 16], texture: '#all', cullface: 'north' },
+            south: { uv: [0, 0, 16, 16], texture: '#all', cullface: 'south' },
+            west: { uv: [0, 0, 16, 16], texture: '#all', cullface: 'west' },
+            east: { uv: [0, 0, 16, 16], texture: '#all', cullface: 'east' },
+          },
+        },
+      ],
+    },
+    null,
+    2,
+  );
 
 /** A flat sprite starting model for items. */
 export const defaultItemModel = (texture: string, handheld: boolean): string =>
@@ -285,11 +320,86 @@ async function writeFileAt(root: string, relative: string, content: string | Buf
 }
 
 /**
+ * Writes the files for one slot.
+ *
+ * `target` is the model the slot points at, or null for an unbound slot: those still need
+ * files, otherwise the game logs a missing-model error for every empty slot in the pool on
+ * every reload.
+ */
+async function writeSlot(
+  packDir: string,
+  kind: EntryKind,
+  slot: number,
+  target: string | null,
+  renderLayer: string | undefined,
+): Promise<void> {
+  if (kind === 'item') {
+    await writeFileAt(
+      packDir,
+      `assets/${SLOT_NAMESPACE}/models/item/${slotName(kind, slot)}.json`,
+      slotRedirectModel(target ?? 'item/generated'),
+    );
+    return;
+  }
+
+  await writeFileAt(
+    packDir,
+    `assets/${SLOT_NAMESPACE}/blockstates/${slotName(kind, slot)}.json`,
+    slotBlockstate(slot),
+  );
+
+  const redirect = slotRedirectModel(target, renderLayer);
+
+  /*
+   * The same model is written at two paths on purpose.
+   *
+   * A blockstate's `model` value is resolved relative to `models/block/` on 1.12.2
+   * and older — the prefix is implicit — but is a full path from `models/` on 1.13
+   * and newer. So `ella:block/slot_000` means `models/block/block/slot_000.json`
+   * on the old versions and `models/block/slot_000.json` on the new ones.
+   *
+   * Writing both lets one blockstate serve the whole range. The alternative is
+   * emitting a different `model` value per version, which needs the target version
+   * at write time — and the pack is written before any game connects.
+   *
+   * Note this quirk applies only to blockstates. A `parent` inside a model file is
+   * a full path on every version, which is why the item models resolve correctly
+   * with a single copy.
+   */
+  await writeFileAt(
+    packDir,
+    `assets/${SLOT_NAMESPACE}/models/block/${slotModelName(slot)}.json`,
+    redirect,
+  );
+  await writeFileAt(
+    packDir,
+    `assets/${SLOT_NAMESPACE}/models/block/block/${slotModelName(slot)}.json`,
+    redirect,
+  );
+  await writeFileAt(
+    packDir,
+    `assets/${SLOT_NAMESPACE}/models/item/${slotName(kind, slot)}.json`,
+    blockItemModel(slot),
+  );
+}
+
+/** The model path a bound entry's slot redirects to. */
+const entryTarget = (project: EllaProject, entry: ProjectEntry): string =>
+  `${project.namespace}:${entry.kind}/${entry.id}`;
+
+const entryRenderLayer = (entry: ProjectEntry): string | undefined =>
+  typeof entry.settings.renderLayer === 'string' ? entry.settings.renderLayer : undefined;
+
+/**
  * Regenerates the whole `ella` slot namespace from the project.
  *
  * The namespace is wiped first: stale blockstates from deleted entries would otherwise
  * keep rendering, which is exactly the kind of ghost that makes people restart the game
  * to "fix" something that was never broken.
+ *
+ * This is the expensive path — a full pool is four files per block slot plus one per item
+ * slot, so a default project regenerates several hundred files. Use it for changes that
+ * move bindings, names or the namespace; {@link writeEntrySlot} covers the rest.
  */
 export async function writeSlotNamespace(
   projectRoot: string,
@@ -310,65 +420,44 @@ export async function writeSlotNamespace(
   for (const kind of ['block', 'item'] as const) {
     for (let slot = 0; slot < project.slotPool[kind]; slot++) {
       const entry = bound.get(`${kind}:${slot}`);
-      // Unbound slots still need files, otherwise the game logs a missing-model error
-      // for every empty slot in the pool on every reload.
-      const target = entry
-        ? `${project.namespace}:${kind}/${entry.id}`
-        : null;
-      const renderLayer =
-        typeof entry?.settings.renderLayer === 'string' ? entry.settings.renderLayer : undefined;
-
-      if (kind === 'block') {
-        await writeFileAt(
-          packDir,
-          `assets/${SLOT_NAMESPACE}/blockstates/${slotName(kind, slot)}.json`,
-          slotBlockstate(slot),
-        );
-
-        const redirect = slotRedirectModel(target, renderLayer);
-
-        /*
-         * The same model is written at two paths on purpose.
-         *
-         * A blockstate's `model` value is resolved relative to `models/block/` on 1.12.2
-         * and older — the prefix is implicit — but is a full path from `models/` on 1.13
-         * and newer. So `ella:block/slot_000` means `models/block/block/slot_000.json`
-         * on the old versions and `models/block/slot_000.json` on the new ones.
-         *
-         * Writing both lets one blockstate serve the whole range. The alternative is
-         * emitting a different `model` value per version, which needs the target version
-         * at write time — and the pack is written before any game connects.
-         *
-         * Note this quirk applies only to blockstates. A `parent` inside a model file is
-         * a full path on every version, which is why the item models resolve correctly
-         * with a single copy.
-         */
-        await writeFileAt(
-          packDir,
-          `assets/${SLOT_NAMESPACE}/models/block/${slotModelName(slot)}.json`,
-          redirect,
-        );
-        await writeFileAt(
-          packDir,
-          `assets/${SLOT_NAMESPACE}/models/block/block/${slotModelName(slot)}.json`,
-          redirect,
-        );
-        await writeFileAt(
-          packDir,
-          `assets/${SLOT_NAMESPACE}/models/item/${slotName(kind, slot)}.json`,
-          blockItemModel(slot),
-        );
-      } else {
-        await writeFileAt(
-          packDir,
-          `assets/${SLOT_NAMESPACE}/models/item/${slotName(kind, slot)}.json`,
-          slotRedirectModel(target ?? 'item/generated'),
-        );
-      }
+      await writeSlot(
+        packDir,
+        kind,
+        slot,
+        entry ? entryTarget(project, entry) : null,
+        entry ? entryRenderLayer(entry) : undefined,
+      );
     }
   }
 
   for (const [filename, content] of Object.entries(buildLangFiles(project))) {
     await writeFileAt(packDir, `assets/${SLOT_NAMESPACE}/lang/${filename}`, content);
   }
+}
+
+/**
+ * Rewrites the files for a single entry's slot, leaving the rest of the namespace alone.
+ *
+ * Settings reach the generated pack through exactly one thing: the render layer, baked
+ * into that slot's redirect model. Nothing else in the namespace — blockstates, item
+ * models, the lang files — depends on an entry's settings, only on its binding and its
+ * display name. So a settings change is a handful of writes, not a regeneration.
+ *
+ * Returns false for an unbound entry, which has no slot files to write.
+ */
+export async function writeEntrySlot(
+  projectRoot: string,
+  project: EllaProject,
+  entry: ProjectEntry,
+): Promise<boolean> {
+  if (entry.slot === null) return false;
+
+  await writeSlot(
+    path.join(projectRoot, 'pack'),
+    entry.kind,
+    entry.slot,
+    entryTarget(project, entry),
+    entryRenderLayer(entry),
+  );
+  return true;
 }

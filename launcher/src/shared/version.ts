@@ -189,7 +189,16 @@ export interface AdapterCoverage {
  * "compiles for 1.21.1" says nothing about 1.21.11.
  */
 export const ADAPTERS: AdapterCoverage[] = [
-  { id: 'forge-1.8.9', min: '1.8', max: '1.9', status: 'planned' },
+  /*
+   * Starts at 1.8.8, not 1.8.
+   *
+   * The jar is compiled against 1.8.9 and reobfuscated to SRG names, so what it covers is
+   * decided by the mappings rather than by the version number. Every method and field the
+   * adapter overrides maps to the same obfuscated target in 1.8.8 and 1.8.9 — checked
+   * against both `joined.srg` files, not assumed from the versions being adjacent. In 1.8
+   * itself every one of them differs, which is why the range stops short of it.
+   */
+  { id: 'forge-1.8.9', min: '1.8.8', max: '1.9', status: 'built' },
   { id: 'forge-1.12.2', min: '1.12', max: '1.13', status: 'built' },
   { id: 'forge-mid', min: '1.16', max: '1.20.2', status: 'planned' },
   { id: 'forge-modern', min: '1.21.1', max: '1.21.2', status: 'built' },

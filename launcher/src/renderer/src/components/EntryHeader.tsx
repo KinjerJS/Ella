@@ -25,7 +25,8 @@ interface Props {
   entry: ProjectEntry;
   namespace: string;
   preview: EntryPreviewDto | undefined;
-  onError: (message: string) => void;
+  /** Reports what went wrong, or null once it no longer applies. */
+  onError: (message: string | null) => void;
   /** Called after a rename, so the caller can follow the entry to its new id. */
   onRenamed: (newId: string) => void;
 }
@@ -50,6 +51,9 @@ export function EntryHeader({ entry, namespace, preview, onError, onRenamed }: P
   const commitId = async (): Promise<void> => {
     const next = id.trim();
     if (next === entry.id) return;
+
+    // Whatever went wrong last time was about the value being replaced.
+    onError(null);
 
     if (!isValidIdentifier(next)) {
       setId(entry.id);
@@ -84,6 +88,7 @@ export function EntryHeader({ entry, namespace, preview, onError, onRenamed }: P
       return;
     }
 
+    onError(null);
     const displayName = trimmedFr ? { en: trimmedEn, fr: trimmedFr } : { en: trimmedEn };
     const result = await window.ella.entries.update(entry.id, { displayName });
     if (!result.ok) onError(result.message);
@@ -94,7 +99,7 @@ export function EntryHeader({ entry, namespace, preview, onError, onRenamed }: P
       {/* Left of the fields on purpose: while renaming or retyping a display name, the
           model is the thing that tells you which entry you are actually editing. */}
       <div className="entry-identity-preview">
-        <ModelPreview preview={preview} size={132} />
+        <ModelPreview preview={preview} size={132} interactive label={t('entry.previewRotate')} />
       </div>
 
       <div className="field-grid" style={{ flex: 1, minWidth: 0 }}>

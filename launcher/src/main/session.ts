@@ -17,11 +17,52 @@ import { launchGame, type RunningGame } from './minecraft/launch.ts';
 import { findForgeVersionId } from './minecraft/forge.ts';
 import { ensureAdapterInstalled } from './adapters.ts';
 import { collectCrashDiagnostics, collectLaunchFailureDiagnostics } from './diagnostics.ts';
-import { loadProject, saveProject, syncPack, type ProjectError } from './project.ts';
-import { HIGHEST_KNOWN_PACK_FORMAT } from './pack.ts';
+import {
+  loadProject,
+  saveProject,
+  syncPack,
+  syncEntryPack,
+  type ProjectError,
+} from './project.ts';
+import { HIGHEST_KNOWN_PACK_FORMAT, SLOT_NAMESPACE } from './pack.ts';
+import { purgeStashes } from './trash.ts';
 import { loadConfig } from './config.ts';
 
 export type GameStatus = 'stopped' | 'starting' | 'running' | 'connected';
+
+/**
+ * How a game run ended.
+ *
+ * `stopped`     the user pressed Stop — Ella killed it
+ * `quit`        a clean exit from inside the game
+ * `terminated`  killed by something else: Task Manager, the OS, a parent shell
+ * `failed`      a non-zero exit, the only case with something to diagnose
+ */
+export type GameExit =
+  | { kind: 'stopped' }
+  | { kind: 'quit' }
+  | { kind: 'terminated'; signal: string | null }
+  | { kind: 'failed'; code: number };
+
+/**
+ * Reads an exit the way a user would describe it.
+ *
+ * Killing a process reports a null exit code, which is the same shape as being killed by
+ * anything else and is *not* the same thing as failing. Ella used to test `code !== 0`,
+ * so pressing Stop logged an error and opened the crash dialog — the opposite of what the
+ * button promised. Whether the stop was requested is knowledge only the session has, which
+ * is why it is a parameter rather than something inferred here.
+ */
+export function classifyExit(
+  requested: boolean,
+  code: number | null,
+  signal: string | null,
+): GameExit {
+  if (requested) return { kind: 'stopped' };
+  if (code === 0) return { kind: 'quit' };
+  if (code === null) return { kind: 'terminated', signal };
+  return { kind: 'failed', code };
+}
 
 /** How many output lines to retain for a crash report. */
 const MAX_RETAINED_OUTPUT = 400;
@@ -45,6 +86,8 @@ export class Session extends EventEmitter {
   private server: EllaServer;
   private watcher = new ModelWatcher();
   private game: RunningGame | null = null;
+  /** Set by {@link stopGame}, so a deliberate stop is not reported as a failure. */
+  private stopRequested = false;
   private status: GameStatus = 'stopped';
   private reloadTimer: NodeJS.Timeout | null = null;
   /** Tail of the running game's output, kept for crash diagnostics. */
@@ -131,9 +174,18 @@ export class Session extends EventEmitter {
     this.project = project;
     this.projectRoot = root;
 
+    // Files a previous session moved aside for an undo that was never taken. The offers
+    // themselves are long gone, so this is the moment they stop costing disk.
+    await purgeStashes(root);
+
     await syncPack(root, project, this.packFormat());
     this.watcher.stop();
-    await this.watcher.watchDirectory(path.join(root, 'pack'));
+    // The `ella` namespace is Ella's own output, regenerated from the project. Watching it
+    // meant every settings change fed its own writes back in as a model change: a reload
+    // the game did not need, and a preview refresh in the editor for each of them.
+    await this.watcher.watchDirectory(path.join(root, 'pack'), {
+      ignore: (relative) => relative.startsWith(`assets/${SLOT_NAMESPACE}/`),
+    });
 
     this.emit('project', project);
     this.emit('state', this.state);
@@ -168,6 +220,22 @@ export class Session extends EventEmitter {
     if (options.push !== false && this.server.connected) await this.pushAll();
   }
 
+  /**
+   * Adopts a project whose only change is confined to one entry's own slot.
+   *
+   * The same as {@link setProject} except for what it rewrites: one slot instead of the
+   * whole namespace. Settings changes arrive one per slider tick, and regenerating several
+   * hundred files for each of them made the editor feel frozen while it caught up.
+   *
+   * The caller has already persisted the project — this does not save it again.
+   */
+  async setEntry(project: EllaProject, entry: ProjectEntry): Promise<void> {
+    if (!this.projectRoot) throw new Error('No project open');
+    this.project = project;
+    await syncEntryPack(this.projectRoot, project, entry);
+    this.emit('project', project);
+  }
+
   /** The connected game knows its own pack format; otherwise fall back to the table. */
   private packFormat(): number {
     return this.server.game?.hello.packFormat ?? HIGHEST_KNOWN_PACK_FORMAT;
@@ -183,6 +251,9 @@ export class Session extends EventEmitter {
 
     const config = await loadConfig();
     this.versionId = versionId;
+    // Cleared per run: a previous process that ignored its kill signal must not hand its
+    // pending "this was deliberate" to whatever exits next.
+    this.stopRequested = false;
     this.setStatus('starting');
 
     // Without Forge there is no Ella mod, so the game runs but nothing syncs. Launching
@@ -239,36 +310,54 @@ export class Session extends EventEmitter {
     // Captured now: `this.game` is cleared before the crash report is built.
     const command = this.game.command;
 
-    this.game.process.on('exit', (code) => {
+    this.game.process.on('exit', (code, signal) => {
+      const exit = classifyExit(this.stopRequested, code, signal);
+      this.stopRequested = false;
       this.game = null;
       this.setStatus('stopped');
 
-      // Exit code 0 is a normal quit. Anything else means the game failed, and the user
-      // should not have to go hunting through folders to find out why.
-      if (code !== 0) {
-        this.emit('log', {
-          level: 'error',
-          source: 'game',
-          message: `Game exited with code ${code}`,
-        });
+      if (exit.kind === 'quit') return;
 
-        void collectCrashDiagnostics(versionId, code, this.recentOutput, {
-          javaUsed: {
-            major: command.java.major,
-            version: command.java.version,
-            path: command.java.path,
-          },
-          launchedVersionId: command.version.id,
-        })
-          .then((diagnostics) => this.emit('crash', diagnostics))
-          .catch((error: Error) =>
-            this.emit('log', {
-              level: 'error',
-              source: 'ella',
-              message: `Could not collect crash diagnostics: ${error.message}`,
-            }),
-          );
+      if (exit.kind === 'stopped') {
+        this.emit('log', { level: 'info', source: 'game', message: 'Game stopped' });
+        return;
       }
+
+      // Killed from outside. The game did not fault, so there is no crash report to
+      // collect and nothing to diagnose; say what happened and stop there.
+      if (exit.kind === 'terminated') {
+        this.emit('log', {
+          level: 'warn',
+          source: 'game',
+          message: `Game was terminated${exit.signal ? ` (${exit.signal})` : ''}`,
+        });
+        return;
+      }
+
+      // A non-zero exit is a real failure, and the user should not have to go hunting
+      // through folders to find out why.
+      this.emit('log', {
+        level: 'error',
+        source: 'game',
+        message: `Game exited with code ${exit.code}`,
+      });
+
+      void collectCrashDiagnostics(versionId, exit.code, this.recentOutput, {
+        javaUsed: {
+          major: command.java.major,
+          version: command.java.version,
+          path: command.java.path,
+        },
+        launchedVersionId: command.version.id,
+      })
+        .then((diagnostics) => this.emit('crash', diagnostics))
+        .catch((error: Error) =>
+          this.emit('log', {
+            level: 'error',
+            source: 'ella',
+            message: `Could not collect crash diagnostics: ${error.message}`,
+          }),
+        );
     });
   }
 
@@ -335,6 +424,10 @@ export class Session extends EventEmitter {
   }
 
   stopGame(): void {
+    // Recorded before the kill so the exit handler can tell "the user pressed Stop" from
+    // "the game died". Killing a process yields a null exit code, which is otherwise
+    // indistinguishable from a crash.
+    if (this.game) this.stopRequested = true;
     this.game?.process.kill();
     this.game = null;
     this.setStatus('stopped');

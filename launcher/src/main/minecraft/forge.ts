@@ -5,14 +5,25 @@
  * That matters most from 1.13 onwards, where installation is not just unpacking files:
  * the installer runs binary patch and deobfuscation processors, and reproducing those
  * would mean tracking changes to a toolchain that is not ours.
+ *
+ * The installers of 2015 and 2016 have no headless client mode at all — `--installClient`
+ * was added later, and passing it to an older one aborts with "not a recognized option".
+ * Those builds also predate the processors, so their install genuinely is just unpacking
+ * files, and {@link installLegacyForge} does it directly. Which path applies is read off
+ * the installer's own `install_profile.json` rather than guessed from a version number:
+ * the old generation carries a `versionInfo` block, the new one carries `processors`.
  */
 
 import { spawn } from 'node:child_process';
 import { readFile, writeFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { fetchJson, downloadFile } from './download.ts';
-import { ensureDir, getDataRoot, versionsDir, cacheDir } from '../paths.ts';
+import AdmZip from 'adm-zip';
+import { fetchJson, downloadFile, downloadAll } from './download.ts';
+import { ensureDir, getDataRoot, versionsDir, versionDir, librariesDir, cacheDir } from '../paths.ts';
 import { selectJavaFor } from '../java-runtime.ts';
+import { mavenToPath, resolveLibraries } from './libraries.ts';
+import { libraryDownloadTasks } from './install.ts';
+import type { VersionJson } from './types.ts';
 import { compareVersions } from '../../shared/version.ts';
 
 const PROMOTIONS_URL =
@@ -145,6 +156,107 @@ export interface ForgeInstallResult {
   versionId: string;
 }
 
+/**
+ * The pre-2018 installer layout: a complete version document plus one jar to file away.
+ *
+ * `versionInfo` is written verbatim as the version json — it already carries
+ * `inheritsFrom`, so the vanilla document supplies everything it omits. `install.filePath`
+ * names the universal jar inside the installer, and `install.path` says where in
+ * `libraries/` it belongs.
+ */
+interface LegacyInstallProfile {
+  install: { filePath: string; path: string };
+  versionInfo: { id: string } & Record<string, unknown>;
+}
+
+/**
+ * Whether an installer belongs to the generation Ella has to unpack itself.
+ *
+ * Exported for testing: getting this wrong in either direction is silent. Answering yes
+ * for a modern installer would skip the processors and produce a version that launches
+ * into a crash; answering no for an old one puts back the "not a recognized option"
+ * failure this exists to fix.
+ */
+export const isLegacyProfile = (value: unknown): value is LegacyInstallProfile => {
+  const profile = value as LegacyInstallProfile | null;
+  return (
+    typeof profile === 'object' &&
+    profile !== null &&
+    typeof profile.install?.filePath === 'string' &&
+    typeof profile.install?.path === 'string' &&
+    typeof profile.versionInfo?.id === 'string'
+  );
+};
+
+/** Reads `install_profile.json` out of an installer jar, or null when it has none. */
+function readInstallProfile(installerPath: string): unknown {
+  try {
+    const entry = new AdmZip(installerPath).getEntry('install_profile.json');
+    return entry ? JSON.parse(entry.getData().toString('utf8')) : null;
+  } catch {
+    // A profile that cannot be read is not a legacy one; fall through to the installer,
+    // whose own error message will be more useful than anything invented here.
+    return null;
+  }
+}
+
+/**
+ * Installs a pre-2018 Forge build by unpacking it, with no Java process involved.
+ *
+ * Three things make the version launchable: the version json, the universal jar in the
+ * place its own library entry points at, and every other library the json declares.
+ *
+ * That third step is not optional and is easy to overlook, because the official installer
+ * does it invisibly. Without it FML dies before the game window ever opens with
+ * `NoClassDefFoundError: org/objectweb/asm/ClassVisitor` — ASM is listed in the Forge json
+ * with no download url at all, so nothing else in the pipeline would ever fetch it.
+ *
+ * @returns the version id the game should be launched with
+ */
+async function installLegacyForge(
+  installerPath: string,
+  profile: LegacyInstallProfile,
+  onLog?: (line: string) => void,
+): Promise<string> {
+  const id = profile.versionInfo.id;
+
+  const directory = await ensureDir(versionDir(id));
+  await writeFile(
+    path.join(directory, `${id}.json`),
+    JSON.stringify(profile.versionInfo, null, 2),
+    'utf8',
+  );
+
+  const zip = new AdmZip(installerPath);
+  const universal = zip.getEntry(profile.install.filePath);
+  if (!universal) {
+    throw new Error(
+      `The Forge installer is missing ${profile.install.filePath}, so ${id} cannot be installed`,
+    );
+  }
+
+  const target = path.join(librariesDir(), mavenToPath(profile.install.path));
+  await ensureDir(path.dirname(target));
+  await writeFile(target, universal.getData());
+
+  // Only the libraries this version file adds: the vanilla ones were fetched when the
+  // base version was installed, and anything already on disk is skipped by the downloader.
+  const version = profile.versionInfo as unknown as VersionJson;
+  const { classpath, natives } = resolveLibraries(version, librariesDir());
+  const tasks = await libraryDownloadTasks([...classpath, ...natives]);
+
+  const { failures } = await downloadAll(tasks, { concurrency: 8 });
+  if (failures.length > 0) {
+    throw new Error(
+      `${failures.length} of ${tasks.length} Forge libraries could not be downloaded — ` +
+        `the first was ${failures[0].url}`,
+    );
+  }
+
+  onLog?.(`Fetched ${tasks.length} Forge libraries for ${id}`);
+  return id;
+}
+
 export async function installForge(
   mcVersion: string,
   options: { channel?: 'recommended' | 'latest'; onLog?: (line: string) => void } = {},
@@ -160,6 +272,17 @@ export async function installForge(
     `forge-${build.artifactVersion}-installer.jar`,
   );
   await downloadFile({ url: build.installerUrl, destination: installerPath });
+
+  // Old builds have no headless client install, so Ella does it itself. Checked against
+  // the installer's own profile rather than the Minecraft version: the change came with
+  // an installer generation, not with a game release, and 1.12.2 sits on the new side of
+  // it while 1.8.9 sits on the old one.
+  const profile = readInstallProfile(installerPath);
+  if (isLegacyProfile(profile)) {
+    options.onLog?.(`Installing Forge ${build.forgeVersion} directly (installer predates --installClient)`);
+    const versionId = await installLegacyForge(installerPath, profile, options.onLog);
+    return { build, versionId };
+  }
 
   const before = new Set(
     (await readdir(versionsDir(), { withFileTypes: true }).catch(() => []))

@@ -63,7 +63,18 @@ export class ModelWatcher extends EventEmitter {
    * because editors commonly save by writing a temporary file and renaming it over the
    * target, which breaks a watch bound to the original inode.
    */
-  async watchDirectory(directory: string): Promise<void> {
+  async watchDirectory(
+    directory: string,
+    options: {
+      /**
+       * Paths to ignore, relative to `directory` and always with `/` separators.
+       *
+       * Needed because the watched tree contains generated output as well as the author's
+       * files. Without it Ella hears its own writes and reacts to them.
+       */
+      ignore?: (relativePath: string) => boolean;
+    } = {},
+  ): Promise<void> {
     if (this.watchers.has(directory)) return;
 
     const exists = await stat(directory).then((s) => s.isDirectory(), () => false);
@@ -76,6 +87,7 @@ export class ModelWatcher extends EventEmitter {
         if (!/\.(json|png)$/i.test(name)) return;
         // Ignore the temporary files atomic saves leave behind.
         if (name.endsWith('.tmp') || name.endsWith('.part')) return;
+        if (options.ignore?.(name.split(path.sep).join('/'))) return;
 
         this.pending.add(path.join(directory, name));
         this.schedule();
