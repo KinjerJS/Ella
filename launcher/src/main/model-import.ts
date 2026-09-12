@@ -119,7 +119,9 @@ export function inferModelKind(file: string, model: ModelJson): EntryKind {
 
 /** A display name from a file name: `ruby_lamp.json` → `Ruby Lamp`. */
 export function nameFromFile(file: string): string {
-  const base = path.basename(file, path.extname(file));
+  // Split by hand: path.basename only knows the separator of the platform it runs on.
+  const fileName = file.split(/[\\/]/).pop() ?? file;
+  const base = fileName.slice(0, fileName.length - path.extname(fileName).length);
   const words = base.split(/[\s_.-]+/).filter(Boolean);
   return words.length > 0
     ? words.map((word) => word[0].toUpperCase() + word.slice(1)).join(' ')
