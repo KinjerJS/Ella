@@ -97,6 +97,7 @@ or so, and several hundred megabytes. Later builds take seconds.
 cd launcher
 npm run dist          # installer + portable .exe into launcher/release/
 npm run dist:dir      # unpacked app only, for a quick check
+npm run dist:linux    # AppImage into launcher/release/ — run it on Linux
 ```
 
 `dist` runs three steps first, each of which can also be run on its own:
@@ -110,6 +111,11 @@ npm run dist:dir      # unpacked app only, for a quick check
 Two artifacts come out: `Ella-Setup-<version>.exe`, a per-user NSIS installer that needs no
 administrator rights, and `Ella-<version>-portable.exe`, a single self-extracting
 executable. Both are around 80 MB, which is Electron.
+
+`dist:linux` produces `Ella-<version>.AppImage`: one file, no install, runs on any
+distribution once marked executable (`chmod +x`). Build it on Linux — electron-builder does
+not package Linux targets from Windows. On Ubuntu 22.04 and later the AppImage runtime needs
+`libfuse2`, which is no longer installed by default.
 
 **The adapters must be built first.** `stage:adapters` fails the build if it finds no jars
 at all, because an installer without them still launches Minecraft but silently loses live
@@ -151,7 +157,8 @@ requests.
 | `core` | ubuntu | always — `ella-core` tests |
 | `adapters` | ubuntu | always — both jars, uploaded as an artifact |
 | `windows` | windows | pushes and tags — the installers |
-| `release` | ubuntu | tags matching `v*` — attaches the `.exe`s to a GitHub release |
+| `linux` | ubuntu | pushes and tags — the AppImage |
+| `release` | ubuntu | tags matching `v*` — attaches the `.exe`s and the AppImage to a GitHub release |
 
 Pull requests skip packaging: it is deterministic once the jobs above pass, and a Windows
 runner costs several times an Ubuntu one.

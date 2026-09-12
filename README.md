@@ -52,6 +52,7 @@ promise the disk cannot keep.
 | Blockbench live-sync plugin | done |
 | Resource pack `.zip` export | done |
 | Windows installer + portable `.exe` | done — built and smoke-tested |
+| Linux AppImage | built by CI, not yet smoke-tested |
 | GitHub Actions build & release workflow | written, not yet run against a remote |
 | Forge adapter 1.12.2 (`[1.12, 1.13)`) | **verified in game** — blocks render in hand and placed |
 | Forge adapter 1.8.9 (`[1.8.8, 1.9)`) | **verified in game** — mod loads, blocks register and place |
@@ -118,7 +119,8 @@ Building from source additionally needs Node.js 20+ and a JDK 17 for Gradle.
 cd launcher && npm run dist
 ```
 
-Produces a per-user installer and a portable `.exe` in `launcher/release/`. The adapter
+Produces a per-user installer and a portable `.exe` in `launcher/release/`; on Linux,
+`npm run dist:linux` produces an AppImage instead. The adapter
 jars have to be built first — see [`docs/building.md`](docs/building.md#packaging), which
 also covers the CI workflow and the one Windows privilege error worth knowing about.
 

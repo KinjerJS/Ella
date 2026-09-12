@@ -57,7 +57,14 @@ portable:
 linux:
   icon: build/icon.png
   category: Development
-  target: [AppImage]
+  # One self-contained file that runs on any distribution, with nothing to install —
+  # the Linux counterpart of the portable .exe.
+  target:
+    - target: AppImage
+      arch: [x64]
+
+appImage:
+  artifactName: Ella-${version}.${ext}
 
 mac:
   icon: build/icon.png

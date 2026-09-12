@@ -18,7 +18,9 @@
     "predist": "npm run build && npm run icon && npm run stage:adapters",
     "dist": "electron-builder --win",
     "predist:dir": "npm run predist",
-    "dist:dir": "electron-builder --win --dir"
+    "dist:dir": "electron-builder --win --dir",
+    "predist:linux": "npm run predist",
+    "dist:linux": "electron-builder --linux"
   },
   "dependencies": {
     "adm-zip": "^0.5.16"
