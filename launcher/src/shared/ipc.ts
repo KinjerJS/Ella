@@ -122,6 +122,29 @@ export interface EntryPreviewDto {
   textureHeight: number | null;
 }
 
+/** What importing a model file brings with it, reported before and after the import. */
+export interface ModelImportSummaryDto {
+  /** Images found beside the file and copied into the project. */
+  imported: number;
+  /** References left pointing at Minecraft's own textures. */
+  vanilla: number;
+  /** References nothing could be found for, each backed by a placeholder. */
+  missing: string[];
+  /** A parent this project cannot supply, which stops the model loading; null when fine. */
+  missingParent: string | null;
+}
+
+/** A model file picked for import, read but not yet written anywhere. */
+export interface ModelImportPreviewDto {
+  path: string;
+  fileName: string;
+  /** Inferred from the file; the author can change it before importing. */
+  kind: EntryKind;
+  /** Derived from the file name. */
+  suggestedName: string;
+  summary: ModelImportSummaryDto;
+}
+
 export interface CrashDiagnosticsDto {
   versionId: string;
   exitCode: number | null;
@@ -274,6 +297,31 @@ export interface EllaApi {
     delete(id: string, deleteFiles: boolean): Promise<Result<void>>;
     /** Changes an entry's identifier, moving the files named after it. */
     rename(id: string, newId: string): Promise<Result<ProjectEntry>>;
+    /**
+     * Copies an entry with its own model, textures and settings. An omitted id takes the
+     * next in the series — `lamp_1`, `lamp_2`… — with display names numbered to match.
+     */
+    duplicate(
+      id: string,
+      options: { id?: string; displayName?: LocaleMap },
+    ): Promise<Result<ProjectEntry>>;
+    /**
+     * Opens a file picker for a model JSON and reads it, without importing anything.
+     * Resolves to null when the picker is cancelled.
+     */
+    inspectModel(): Promise<Result<ModelImportPreviewDto | null>>;
+    /** Adds an entry whose model is a file picked with {@link inspectModel}. */
+    importModel(options: {
+      path: string;
+      id: string;
+      kind: EntryKind;
+      displayName: LocaleMap;
+    }): Promise<Result<ProjectEntry>>;
+    /**
+     * Opens a file picker and replaces an entry's model with the chosen JSON.
+     * Resolves to null when the picker is cancelled.
+     */
+    replaceModel(id: string): Promise<Result<ModelImportSummaryDto | null>>;
     /** Live settings change; returns which keys the running version honoured. */
     patchLive(id: string, settings: Record<string, unknown>): Promise<
       Result<SettingsPatchResultDto | null>
@@ -386,6 +434,10 @@ export const CHANNELS = {
   entriesUpdate: 'entries:update',
   entriesDelete: 'entries:delete',
   entriesRename: 'entries:rename',
+  entriesDuplicate: 'entries:duplicate',
+  entriesInspectModel: 'entries:inspectModel',
+  entriesImportModel: 'entries:importModel',
+  entriesReplaceModel: 'entries:replaceModel',
   entriesPatchLive: 'entries:patchLive',
   entriesBlockbench: 'entries:blockbench',
   entriesTextures: 'entries:textures',

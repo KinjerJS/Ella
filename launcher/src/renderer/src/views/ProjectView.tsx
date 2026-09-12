@@ -10,8 +10,10 @@ import type {
   ProjectSummaryDto,
   ProjectFootprintDto,
   VersionSummaryDto,
+  ModelImportPreviewDto,
 } from '../../../shared/ipc.ts';
 import { ModelPreview } from '../components/ModelPreview.tsx';
+import { ImportModelEntry } from '../components/ImportModelEntry.tsx';
 import { usePreviews } from '../previews.ts';
 import { useInstalledVersions } from '../versions.ts';
 import { slugify, isValidIdentifier, type EllaProject } from '../../../shared/project.ts';
@@ -32,6 +34,7 @@ export function ProjectView({ session, onOpenEntry }: Props) {
   const [deletingProject, setDeletingProject] = useState(false);
   const [editing, setEditing] = useState(false);
   const [addingEntry, setAddingEntry] = useState(false);
+  const [importing, setImporting] = useState<ModelImportPreviewDto | null>(null);
   // Cards by default: seeing the models is the point of this list.
   const [view, setView] = useState<'cards' | 'rows'>('cards');
   const previews = usePreviews(Boolean(project));
@@ -44,6 +47,18 @@ export function ProjectView({ session, onOpenEntry }: Props) {
 
   const open = async (root: string): Promise<void> => {
     unwrapOr(await window.ella.projects.open(root), (message) => setError(message));
+  };
+
+  const pickModel = async (): Promise<void> => {
+    const result = await window.ella.entries.inspectModel();
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    if (result.value) {
+      setAddingEntry(false);
+      setImporting(result.value);
+    }
   };
 
   const closeProject = async (): Promise<void> => {
@@ -146,13 +161,37 @@ export function ProjectView({ session, onOpenEntry }: Props) {
             </button>
           </div>
         )}
-        <button className="primary" onClick={() => setAddingEntry((current) => !current)}>
+        <button onClick={() => void pickModel()} title={t('import.buttonHelp')}>
+          <Icon name="download" />
+          {t('import.button')}
+        </button>
+        <button
+          className="primary"
+          onClick={() => {
+            setImporting(null);
+            setAddingEntry((current) => !current);
+          }}
+        >
           <Icon name="plus" />
           {t('entry.new')}
         </button>
       </div>
 
-      {(addingEntry || project.entries.length === 0) && (
+      {importing && (
+        <ImportModelEntry
+          project={project}
+          preview={importing}
+          onCreated={(id) => {
+            setImporting(null);
+            // No toast: the import announces itself, with the way back attached.
+            onOpenEntry(id);
+          }}
+          onCancel={() => setImporting(null)}
+          onError={setError}
+        />
+      )}
+
+      {!importing && (addingEntry || project.entries.length === 0) && (
         <NewEntry
           onCreated={(id, name) => {
             setAddingEntry(false);
@@ -165,7 +204,7 @@ export function ProjectView({ session, onOpenEntry }: Props) {
       )}
 
       {project.entries.length === 0 ? (
-        !addingEntry && (
+        !addingEntry && !importing && (
           <EmptyState
             icon="block"
             title={t('project.noEntries')}

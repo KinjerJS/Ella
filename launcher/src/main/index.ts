@@ -30,6 +30,8 @@ import {
   updateEntry,
   deleteEntry,
   renameEntry,
+  duplicateEntry,
+  entryStash,
   listProjects,
   deleteProject,
   measureProject,
@@ -40,6 +42,17 @@ import {
   writeModelFile,
 } from './project.ts';
 import { UndoRegistry } from './undo.ts';
+import { stashFiles } from './trash.ts';
+import {
+  readModelFile,
+  inferModelKind,
+  nameFromFile,
+  planModelImport,
+  importModelAsEntry,
+  replaceEntryModel,
+  undoReplaceModel,
+  type ImportModelOptions,
+} from './model-import.ts';
 import { planVersionChange, applyVersionChange } from './version-change.ts';
 import {
   listTextures,
@@ -105,6 +118,30 @@ function offerUndo(
   inverse: () => Promise<void>,
 ): void {
   send(EVENTS.undo, undoable.offer(messageKey, values, inverse));
+}
+
+/**
+ * The way back from an action that added an entry: the entry out of the manifest, and the
+ * files it wrote moved aside rather than deleted — they may have been opened in Blockbench
+ * and saved in the seconds since.
+ */
+function removeAddedEntry(id: string, files: string[]): () => Promise<void> {
+  return async () => {
+    const current = requireProject();
+    const removed = await deleteEntry(current.root, current.project, id);
+    await stashFiles(current.root, entryStash(id), files);
+    await session.setProject(removed.project);
+  };
+}
+
+/** Asks for a model JSON. Null when the picker is cancelled or there is no window. */
+async function pickModelFile(): Promise<string | null> {
+  if (!window) return null;
+  const chosen = await dialog.showOpenDialog(window, {
+    properties: ['openFile'],
+    filters: [{ name: 'Minecraft model', extensions: ['json'] }],
+  });
+  return chosen.canceled ? null : (chosen.filePaths[0] ?? null);
 }
 
 function findEntry(id: string) {
@@ -337,6 +374,66 @@ function registerHandlers(): void {
     }
 
     return entry;
+  });
+
+  handle(CHANNELS.entriesDuplicate, async (id: never, options: never) => {
+    const { project, root } = requireProject();
+    const { project: updated, entry, files } = await duplicateEntry(root, project, id, options);
+    await session.setProject(updated);
+
+    offerUndo('entry.duplicatedDone', { from: id, to: entry.id }, removeAddedEntry(entry.id, files));
+    return entry;
+  });
+
+  handle(CHANNELS.entriesInspectModel, async () => {
+    const { project, root } = requireProject();
+    const file = await pickModelFile();
+    if (!file) return null;
+
+    const model = await readModelFile(file);
+    const kind = inferModelKind(file, model);
+    const suggestedName = nameFromFile(file);
+    // The summary does not depend on the id the author will pick, so any valid one plans it.
+    const { summary } = await planModelImport(root, project, file, model, { id: 'model', kind });
+
+    return { path: file, fileName: path.basename(file), kind, suggestedName, summary };
+  });
+
+  handle(CHANNELS.entriesImportModel, async (options: never) => {
+    const { project, root } = requireProject();
+    const { path: file, ...entryOptions } = options as ImportModelOptions & { path: string };
+    const { project: updated, entry, files } = await importModelAsEntry(
+      root,
+      project,
+      file,
+      entryOptions,
+    );
+    await session.setProject(updated);
+
+    offerUndo(
+      'import.createdDone',
+      { file: path.basename(file), id: entry.id },
+      removeAddedEntry(entry.id, files),
+    );
+    return entry;
+  });
+
+  handle(CHANNELS.entriesReplaceModel, async (id: never) => {
+    const { project, root } = requireProject();
+    const entry = findEntry(id);
+    const file = await pickModelFile();
+    if (!file) return null;
+
+    const replaced = await replaceEntryModel(root, project, entry, file);
+    // The file watcher would catch this too, but reloading explicitly means the game
+    // updates immediately rather than after the debounce window.
+    await session.pushAll();
+
+    offerUndo('import.replacedDone', { id: entry.id, file: path.basename(file) }, async () => {
+      await undoReplaceModel(requireProject().root, replaced);
+      await session.pushAll();
+    });
+    return replaced.summary;
   });
 
   handle(CHANNELS.entriesDelete, async (id: never, deleteFiles: never) => {

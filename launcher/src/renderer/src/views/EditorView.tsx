@@ -7,11 +7,21 @@ import { useI18n } from '../i18n.tsx';
 import { SettingsForm } from '../components/SettingsForm.tsx';
 import { TexturePanel } from '../components/TexturePanel.tsx';
 import { QuickNewEntry } from '../components/QuickNewEntry.tsx';
+import { ImportModelEntry } from '../components/ImportModelEntry.tsx';
 import { EntryHeader } from '../components/EntryHeader.tsx';
 import { usePreviews } from '../previews.ts';
 import { findParentTrap } from '../../../shared/model-compat.ts';
+import {
+  slugify,
+  isValidIdentifier,
+  duplicateIdFor,
+  duplicateDisplayName,
+  type EllaProject,
+  type ProjectEntry,
+} from '../../../shared/project.ts';
 import type { Facts } from '../facts.ts';
 import type { SessionHook } from '../session.ts';
+import type { ModelImportPreviewDto } from '../../../shared/ipc.ts';
 import type { View } from '../navigation.ts';
 
 interface Props {
@@ -30,18 +40,21 @@ export function EditorView({ session, facts, selectedId, onSelect, onNavigate }:
   const [error, setError] = useState<string | null>(null);
   const [ignored, setIgnored] = useState<string[]>([]);
   const [deleting, setDeleting] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState<ModelImportPreviewDto | null>(null);
   const [fixingParent, setFixingParent] = useState(false);
   const previews = usePreviews(Boolean(project));
 
-  // Any change of selection cancels a pending delete, so a confirmation can never end up
-  // aimed at an entry other than the one it was opened for.
+  // Any change of selection cancels a pending delete or duplicate, so a confirmation can
+  // never end up aimed at an entry other than the one it was opened for.
   //
   // The error goes with it, for the same reason: it named a failure on the entry being
   // left, and reading it above a different one is worse than not seeing it at all. The
   // capability list too — it describes what the last patched entry's settings did.
   useEffect(() => {
     setDeleting(false);
+    setDuplicating(false);
     setError(null);
     setIgnored([]);
   }, [selectedId]);
@@ -114,6 +127,39 @@ export function EditorView({ session, facts, selectedId, onSelect, onNavigate }:
     if (!result.ok) toast.error(result.message);
   };
 
+  // Reported as toasts rather than in the banner: the banner lives beside the selected
+  // entry, and an empty project has none.
+  const pickModel = async (): Promise<void> => {
+    const result = await window.ella.entries.inspectModel();
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+    if (result.value) {
+      setAdding(false);
+      setImporting(result.value);
+    }
+  };
+
+  const replaceModel = async (id: string): Promise<void> => {
+    const result = await window.ella.entries.replaceModel(id);
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+
+    // Null is a cancelled picker. A replacement announces itself, with the way back
+    // attached; only what it could not bring along needs saying here — each of those
+    // breaks the model in game, far from the import that caused it.
+    const summary = result.value;
+    if (summary?.missingParent) {
+      toast.error(t('import.missingParent', { parent: summary.missingParent }));
+    }
+    if (summary && summary.missing.length > 0) {
+      toast.info(t('import.missingTextures', { list: summary.missing.join(', ') }));
+    }
+  };
+
   const act = async (
     action: () => Promise<{ ok: boolean; message?: string }>,
     success?: string,
@@ -155,11 +201,21 @@ export function EditorView({ session, facts, selectedId, onSelect, onNavigate }:
         <div className="row" style={{ marginBottom: 10 }}>
           <h2 style={{ margin: 0 }}>{t('project.entries')}</h2>
           <span className="spacer" />
-          {!adding && (
-            <button className="subtle" onClick={() => setAdding(true)}>
-              <Icon name="plus" size={14} />
-              {t('entry.new')}
-            </button>
+          {!adding && !importing && (
+            <>
+              <button className="subtle" onClick={() => setAdding(true)}>
+                <Icon name="plus" size={14} />
+                {t('entry.new')}
+              </button>
+              <button
+                className="subtle"
+                onClick={() => void pickModel()}
+                title={t('import.buttonHelp')}
+              >
+                <Icon name="download" size={14} />
+                {t('import.short')}
+              </button>
+            </>
           )}
         </div>
 
@@ -172,6 +228,19 @@ export function EditorView({ session, facts, selectedId, onSelect, onNavigate }:
             }}
             onCancel={() => setAdding(false)}
             onError={setError}
+          />
+        )}
+
+        {importing && (
+          <ImportModelEntry
+            project={project}
+            preview={importing}
+            onCreated={(id) => {
+              setImporting(null);
+              onSelect(id);
+            }}
+            onCancel={() => setImporting(null)}
+            onError={toast.error}
           />
         )}
 
@@ -300,14 +369,44 @@ export function EditorView({ session, facts, selectedId, onSelect, onNavigate }:
             </button>
             <span className="spacer" />
             <button
+              onClick={() => void replaceModel(entry.id)}
+              title={t('import.replaceHelp')}
+            >
+              {t('import.replace')}
+            </button>
+            <button
+              onClick={() => {
+                setDeleting(false);
+                setDuplicating((current) => !current);
+              }}
+              aria-expanded={duplicating}
+            >
+              {t('entry.duplicate')}
+            </button>
+            <button
               className="danger icon-only"
-              onClick={() => setDeleting(true)}
+              onClick={() => {
+                setDuplicating(false);
+                setDeleting(true);
+              }}
               title={t('entry.delete')}
               aria-label={t('entry.delete')}
             >
               <Icon name="trash" />
             </button>
           </div>
+
+          {duplicating && (
+            <DuplicateEntry
+              project={project}
+              entry={entry}
+              onCancel={() => setDuplicating(false)}
+              // No toast: the copy announces itself, with the way back attached. Following
+              // it to the new entry closes this card, through the selection effect above.
+              onDone={onSelect}
+              onError={setError}
+            />
+          )}
 
           {deleting && (
             <DeleteEntry
@@ -338,6 +437,97 @@ export function EditorView({ session, facts, selectedId, onSelect, onNavigate }:
           />
         </div>
       )}
+    </div>
+  );
+}
+
+interface DuplicateEntryProps {
+  project: EllaProject;
+  entry: ProjectEntry;
+  onCancel: () => void;
+  /** Called with the copy's id, so the caller can select it. */
+  onDone: (id: string) => void;
+  onError: (message: string) => void;
+}
+
+/**
+ * Asks for the copy's name before duplicating an entry.
+ *
+ * The name is optional on purpose. Most copies are variants made to be renamed later, and
+ * making every one of them stop for a name would turn a quick action into a form; an empty
+ * field takes the next in the series instead — `lamp_1`, `lamp_2` — shown as the
+ * placeholder, so what Enter will do is visible before it is pressed.
+ */
+function DuplicateEntry({ project, entry, onCancel, onDone, onError }: DuplicateEntryProps) {
+  const { t } = useI18n();
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const isTaken = (candidate: string): boolean =>
+    project.entries.some((existing) => existing.id === candidate);
+
+  const typed = name.trim();
+  const fallbackId = duplicateIdFor(entry.id, isTaken);
+  const id = typed ? slugify(typed) : fallbackId;
+  const problem = !typed
+    ? null
+    : !isValidIdentifier(id)
+      ? t('entry.idHelp')
+      : isTaken(id)
+        ? t('entry.duplicateTaken', { id })
+        : null;
+
+  const confirm = async (): Promise<void> => {
+    if (problem || busy) return;
+
+    setBusy(true);
+    // Unnamed, the main process picks the id itself: it can also see files left on disk by
+    // a deleted entry, which this list cannot, and moves past them rather than over them.
+    const result = await window.ella.entries.duplicate(
+      entry.id,
+      typed ? { id, displayName: { en: typed } } : {},
+    );
+    setBusy(false);
+
+    if (result.ok) onDone(result.value.id);
+    else onError(result.message);
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div className="name">{t('entry.duplicateTitle', { id: entry.id })}</div>
+      <div className="help" style={{ marginTop: 4 }}>
+        {t('entry.duplicateExplain')}
+      </div>
+
+      <div className="field" style={{ marginTop: 10, maxWidth: 360 }}>
+        <label>{t('entry.displayName')}</label>
+        <input
+          value={name}
+          autoFocus
+          placeholder={duplicateDisplayName(entry, fallbackId).en}
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') void confirm();
+            if (event.key === 'Escape') onCancel();
+          }}
+        />
+        <div className="help">{problem ?? `${project.namespace}:${id}`}</div>
+      </div>
+
+      <div className="row">
+        <button
+          className="primary"
+          onClick={() => void confirm()}
+          disabled={problem !== null || busy}
+          title={problem ?? undefined}
+        >
+          {t('entry.duplicate')}
+        </button>
+        <button onClick={onCancel} disabled={busy}>
+          {t('common.cancel')}
+        </button>
+      </div>
     </div>
   );
 }

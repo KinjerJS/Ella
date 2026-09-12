@@ -2,7 +2,8 @@
  * Project persistence and entry management.
  */
 
-import { readFile, writeFile, rename, readdir, mkdir, rm, stat } from 'node:fs/promises';
+import { readFile, writeFile, rename, readdir, mkdir, rm, stat, copyFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import {
@@ -13,9 +14,13 @@ import {
   isValidIdentifier,
   nextFreeSlot,
   defaultModelOutput,
+  assetPath,
   blockTexturePath,
   itemTexturePath,
+  duplicateIdFor,
+  duplicateDisplayName,
   type EllaProject,
+  type ModelSource,
   type ProjectEntry,
 } from '../shared/project.ts';
 import type { EntryKind, LocaleMap } from '../shared/protocol.ts';
@@ -326,14 +331,12 @@ export interface CreateEntryOptions {
 }
 
 /**
- * Adds an entry and writes its starting files: a cube (or sprite) model and a
- * placeholder texture, so the block is visible in game before any Blockbench work.
+ * Validates a new entry and allocates its slot, without writing anything.
+ *
+ * Shared by everything that adds an entry, so the rules for identifiers and slots cannot
+ * differ between creating one from scratch and importing one.
  */
-export async function createEntry(
-  root: string,
-  project: EllaProject,
-  options: CreateEntryOptions,
-): Promise<{ project: EllaProject; entry: ProjectEntry }> {
+export function prepareEntry(project: EllaProject, options: CreateEntryOptions): ProjectEntry {
   if (!isValidIdentifier(options.id)) {
     throw new ProjectError('INVALID_ID', `Identifier must match [a-z0-9_]+, got "${options.id}"`);
   }
@@ -349,14 +352,9 @@ export async function createEntry(
     );
   }
 
-  const texture =
-    options.kind === 'block'
-      ? `${project.namespace}:block/${options.id}`
-      : `${project.namespace}:item/${options.id}`;
-
   const output = defaultModelOutput(project.namespace, options);
 
-  const entry: ProjectEntry = {
+  return {
     id: options.id,
     kind: options.kind,
     displayName: options.displayName,
@@ -372,6 +370,19 @@ export async function createEntry(
     },
     settings: defaultsFor(options.kind),
   };
+}
+
+/**
+ * Adds an entry and writes its starting files: a cube (or sprite) model and a
+ * placeholder texture, so the block is visible in game before any Blockbench work.
+ */
+export async function createEntry(
+  root: string,
+  project: EllaProject,
+  options: CreateEntryOptions,
+): Promise<{ project: EllaProject; entry: ProjectEntry }> {
+  const entry = prepareEntry(project, options);
+  const texture = `${project.namespace}:${options.kind}/${options.id}`;
 
   const updated: EllaProject = { ...project, entries: [...project.entries, entry] };
 
@@ -487,6 +498,258 @@ export async function renameEntry(
   await saveProject(root, updated);
   return { project: updated, entry: renamed };
 }
+
+export interface DuplicateEntryOptions {
+  /** The copy's identifier. Omitted, the next free one in the series: `lamp_1`, `lamp_2`… */
+  id?: string;
+  /** Omitted, the source's names, numbered like the identifier when it carries a counter. */
+  displayName?: LocaleMap;
+}
+
+export interface DuplicatedEntry {
+  project: EllaProject;
+  entry: ProjectEntry;
+  /** Project-relative paths of every file the copy wrote, so it can be taken back. */
+  files: string[];
+}
+
+interface PlannedCopy {
+  from: string;
+  to: string;
+  /** Written instead of the source's bytes, when the file needed rewriting. */
+  content?: string;
+}
+
+interface DuplicatePlan {
+  model: ModelSource;
+  copies: PlannedCopy[];
+  /** The first destination that already exists, or null when nothing would be overwritten. */
+  blocked: string | null;
+}
+
+/**
+ * Copies an entry under a new identifier, with a model, textures and settings of its own.
+ *
+ * A copy still pointing at its source's texture would be a trap: importing an image for one
+ * would repaint both. So the textures the entry owns are copied along and the model's
+ * references rewritten to match. "Owns" follows the names Ella gives textures — `lamp`,
+ * `lamp_side` — so a texture shared under a name of its own stays shared, which is how the
+ * author set it up.
+ *
+ * Existing files are never overwritten. An entry deleted with its files kept leaves them
+ * under its old id, and a copy landing on that id must not bury them: an unnamed copy moves
+ * on to the next number, a named one is refused.
+ */
+export async function duplicateEntry(
+  root: string,
+  project: EllaProject,
+  id: string,
+  options: DuplicateEntryOptions = {},
+): Promise<DuplicatedEntry> {
+  const index = project.entries.findIndex((candidate) => candidate.id === id);
+  if (index === -1) throw new ProjectError('UNKNOWN_ENTRY', `No entry named "${id}"`);
+  const source = project.entries[index];
+
+  if (options.id !== undefined) {
+    if (!isValidIdentifier(options.id)) {
+      throw new ProjectError('INVALID_ID', `Identifier must match [a-z0-9_]+, got "${options.id}"`);
+    }
+    if (project.entries.some((candidate) => candidate.id === options.id)) {
+      throw new ProjectError('DUPLICATE_ID', `An entry named "${options.id}" already exists`);
+    }
+  }
+
+  const slot = nextFreeSlot(project, source.kind);
+  if (slot === null) {
+    throw new ProjectError(
+      'SLOT_POOL_FULL',
+      `No free ${source.kind} slot; the pool holds ${project.slotPool[source.kind]}`,
+    );
+  }
+
+  const taken = new Set(project.entries.map((candidate) => candidate.id));
+  let newId: string;
+  let plan: DuplicatePlan;
+  for (;;) {
+    newId = options.id ?? duplicateIdFor(id, (candidate) => taken.has(candidate));
+    plan = await planDuplicate(root, project, source, newId);
+    if (plan.blocked === null) break;
+
+    if (options.id !== undefined) {
+      throw new ProjectError(
+        'ENTRY_FILES_EXIST',
+        `"${plan.blocked}" already exists; rename or remove it before using "${newId}"`,
+      );
+    }
+    taken.add(newId);
+  }
+
+  const files: string[] = [];
+  try {
+    for (const copy of plan.copies) {
+      const from = path.join(root, ...copy.from.split('/'));
+      const to = path.join(root, ...copy.to.split('/'));
+      await mkdir(path.dirname(to), { recursive: true });
+
+      // Exclusive either way, so a file that appeared since the plan was checked still wins.
+      if (copy.content === undefined) await copyFile(from, to, constants.COPYFILE_EXCL);
+      else await writeFile(to, copy.content, { encoding: 'utf8', flag: 'wx' });
+      files.push(copy.to);
+    }
+  } catch (error) {
+    // The manifest is written last, so nothing would ever list — or clean up — half a copy.
+    await Promise.all(
+      files.map((relative) => rm(path.join(root, ...relative.split('/')), { force: true })),
+    );
+    throw error;
+  }
+
+  const entry: ProjectEntry = {
+    ...source,
+    id: newId,
+    displayName: options.displayName ?? duplicateDisplayName(source, newId),
+    slot,
+    model: plan.model,
+    settings: structuredClone(source.settings),
+  };
+
+  // Beside its source rather than at the bottom, and after the copies already made from it,
+  // so a series reads in order.
+  const base = source.id.replace(/_\d+$/, '');
+  let position = index + 1;
+  while (
+    position < project.entries.length &&
+    project.entries[position].id.startsWith(`${base}_`) &&
+    /^\d+$/.test(project.entries[position].id.slice(base.length + 1))
+  ) {
+    position++;
+  }
+
+  const entries = [...project.entries];
+  entries.splice(position, 0, entry);
+  const updated = { ...project, entries };
+
+  await saveProject(root, updated);
+  return { project: updated, entry, files };
+}
+
+/** Which files a copy of `source` named `newId` needs, and whether any of them is taken. */
+async function planDuplicate(
+  root: string,
+  project: EllaProject,
+  source: ProjectEntry,
+  newId: string,
+): Promise<DuplicatePlan> {
+  const output = defaultModelOutput(project.namespace, { id: newId, kind: source.kind });
+  const model: ModelSource = {
+    ...source.model,
+    output,
+    path:
+      source.model.path === source.model.output
+        ? output
+        : path.posix.join(
+            path.posix.dirname(source.model.path),
+            `${newId}${path.posix.extname(source.model.path)}`,
+          ),
+  };
+
+  // `rest` is a reference without its namespace, `block/lamp_side`; the file name keeps
+  // whatever followed the source's id.
+  const textureFile = (rest: string): string =>
+    assetPath(project.namespace, 'textures', `${rest}.png`);
+  const renamedRest = (rest: string): string => {
+    const slash = rest.lastIndexOf('/');
+    return `${rest.slice(0, slash + 1)}${newId}${rest.slice(slash + 1 + source.id.length)}`;
+  };
+
+  const prefix = `${project.namespace}:`;
+  const references = new Map<string, string>();
+  const textureCopies: PlannedCopy[] = [];
+  const addTexture = (rest: string): void => {
+    if (references.has(`${prefix}${rest}`)) return;
+    const to = renamedRest(rest);
+    references.set(`${prefix}${rest}`, `${prefix}${to}`);
+    textureCopies.push(
+      { from: textureFile(rest), to: textureFile(to) },
+      // An animated texture without its .mcmeta renders as a tall strip, not as an error.
+      { from: `${textureFile(rest)}.mcmeta`, to: `${textureFile(to)}.mcmeta` },
+    );
+  };
+
+  // The texture textureRelativePath names, which the cards preview even when the model has
+  // stopped referencing it.
+  addTexture(`${source.kind}/${source.id}`);
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const text = await readFile(path.join(root, ...source.model.output.split('/')), 'utf8');
+    parsed = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    // Missing or malformed: copied as it is, and validateForExport reports it on both.
+  }
+
+  const textures = parsed?.textures;
+  let content: string | undefined;
+  if (textures && typeof textures === 'object') {
+    for (const reference of Object.values(textures)) {
+      if (typeof reference !== 'string' || !reference.startsWith(prefix)) continue;
+      const rest = reference.slice(prefix.length);
+      if (textureOwner(project, rest.slice(rest.lastIndexOf('/') + 1)) === source.id) {
+        addTexture(rest);
+      }
+    }
+
+    let changed = false;
+    const rewritten = Object.fromEntries(
+      Object.entries(textures).map(([key, reference]) => {
+        const next = typeof reference === 'string' ? references.get(reference) : undefined;
+        if (next) changed = true;
+        return [key, next ?? reference];
+      }),
+    );
+    // Untouched otherwise: this is the author's file, and a byte copy is the faithful one.
+    if (changed) content = `${JSON.stringify({ ...parsed, textures: rewritten }, null, 2)}\n`;
+  }
+
+  const candidates: PlannedCopy[] = [{ from: source.model.output, to: output, content }];
+  if (source.model.path !== source.model.output) {
+    candidates.push({ from: source.model.path, to: model.path });
+  }
+  candidates.push(...textureCopies);
+
+  const copies: PlannedCopy[] = [];
+  let blocked: string | null = null;
+  for (const copy of candidates) {
+    // A file the source never had is not copied, so whatever sits at its destination is fine.
+    if (!(await fileExists(root, copy.from))) continue;
+    if (blocked === null && (await pathExists(root, copy.to))) blocked = copy.to;
+    copies.push(copy);
+  }
+
+  return { model, copies, blocked };
+}
+
+/**
+ * The entry a texture file belongs to by Ella's naming: `lamp_side` is `lamp`'s.
+ *
+ * The longest identifier wins, so with both `lamp` and `lamp_post` in the project,
+ * `lamp_post_side` is `lamp_post`'s and a copy of `lamp` leaves it alone.
+ */
+function textureOwner(project: EllaProject, name: string): string | null {
+  let owner: string | null = null;
+  for (const { id } of project.entries) {
+    if ((name === id || name.startsWith(`${id}_`)) && id.length > (owner?.length ?? 0)) {
+      owner = id;
+    }
+  }
+  return owner;
+}
+
+const fileExists = (root: string, relative: string): Promise<boolean> =>
+  stat(path.join(root, ...relative.split('/'))).then((s) => s.isFile(), () => false);
+
+const pathExists = (root: string, relative: string): Promise<boolean> =>
+  stat(path.join(root, ...relative.split('/'))).then(() => true, () => false);
 
 /** The stash a deleted entry's files wait in. See main/trash.ts. */
 export const entryStash = (id: string): string => `entry-${id}`;

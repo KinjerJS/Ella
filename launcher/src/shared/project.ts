@@ -90,6 +90,62 @@ export function slugify(value: string): string {
     .slice(0, 64);
 }
 
+// ---------------------------------------------------------------------------
+// Duplicate naming
+// ---------------------------------------------------------------------------
+
+/** A counter a previous duplicate left on the end of an identifier: the `2` of `lamp_2`. */
+const COUNTER_SUFFIX = /_(\d+)$/;
+
+/**
+ * The identifier a duplicate gets when the author does not name it: `lamp_1`, `lamp_2`…
+ *
+ * A trailing counter is read as the position in a series rather than as part of the name,
+ * so duplicating `lamp_1` continues at `lamp_2` instead of starting `lamp_1_1`. That is
+ * what duplicating over and over looks like, since the editor follows each copy it makes.
+ */
+export function duplicateIdFor(id: string, isTaken: (candidate: string) => boolean): string {
+  const match = COUNTER_SUFFIX.exec(id);
+  const base = match && match.index > 0 ? id.slice(0, match.index) : id;
+  const start = match && match.index > 0 ? Number(match[1]) + 1 : 1;
+
+  for (let counter = start; ; counter++) {
+    const suffix = `_${counter}`;
+    // Trimmed from the base, never the counter: a cut counter would collide with the series.
+    const candidate = `${base.slice(0, 64 - suffix.length)}${suffix}`;
+    if (!isTaken(candidate)) return candidate;
+  }
+}
+
+/**
+ * Display names for an unnamed duplicate, numbered like its identifier: `Lamp` → `Lamp 1`.
+ *
+ * A number the source already ends with is replaced only when it is the one its identifier
+ * carries, so `Lamp 1` becomes `Lamp 2` while a block that is simply called `Stage 2` keeps
+ * its name whole.
+ */
+export function duplicateDisplayName(
+  source: Pick<ProjectEntry, 'id' | 'displayName'>,
+  newId: string,
+): LocaleMap {
+  const counter = COUNTER_SUFFIX.exec(newId)?.[1];
+  if (counter === undefined) return { ...source.displayName };
+
+  const previous = COUNTER_SUFFIX.exec(source.id)?.[1];
+  const numbered = (name: string): string => {
+    const stem = previous !== undefined && name.endsWith(` ${previous}`)
+      ? name.slice(0, -(previous.length + 1))
+      : name;
+    return `${stem} ${counter}`;
+  };
+
+  const result: LocaleMap = { en: numbered(source.displayName.en) };
+  for (const [locale, name] of Object.entries(source.displayName)) {
+    if (locale !== 'en' && name) result[locale] = numbered(name);
+  }
+  return result;
+}
+
 export function emptyProject(name: string, namespace: string): EllaProject {
   return {
     formatVersion: PROJECT_FORMAT_VERSION,
