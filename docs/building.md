@@ -125,7 +125,7 @@ versions as vanilla-only at runtime.
 
 The jars are packaged as `extraResources`, so they sit next to the asar as ordinary files
 rather than inside it. The injector copies them into an instance's `mods` folder, and
-keeping their real filename (`ella-forge-1.12.2-0.2.0.jar`) matters: the stale-jar cleanup
+keeping their real filename (`ella-forge-1.12.2-0.2.1.jar`) matters: the stale-jar cleanup
 matches `ella-*.jar`, so renaming them would let two Ella mods accumulate in one instance.
 
 ### Signing
@@ -170,7 +170,7 @@ JDKs `setup-java` installed and reports the Java 8 toolchain as missing.
 Cutting a release is one command:
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.2.1 && git push origin v0.2.1
 ```
 
 ## Verifying an API before using it
